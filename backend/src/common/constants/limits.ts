@@ -1,0 +1,3 @@
+export const MAX_INT32 = 2147483647;
+
+export const MAX_UNSIGNED_INT32 = 4294967295;

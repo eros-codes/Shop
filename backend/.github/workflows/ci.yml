@@ -1,0 +1,74 @@
+# Runs on every push and pull request: install exactly what the lockfile
+# pins, type-check, lint, and run both test suites - the unit tests
+# against mocks, the e2e suite against a real MySQL.
+#
+# The point is that main is always in a state you could deploy: the
+# things that broke during development here (a column TypeORM could not
+# map, a migration that only worked on an empty database, a query that
+# compiled but had the wrong column name) all show up in one of these
+# steps.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: ecommerce_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # ci, not install: it installs exactly the lockfile and fails if
+      # package.json and the lockfile have drifted apart.
+      - run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Lint
+        run: npx eslint "{src,test}/**/*.ts"
+
+      - name: Unit tests
+        run: npm test
+
+      # The e2e suite boots the real app against the MySQL service above.
+      # DB_DATABASE ends with _test, which is what the suite's own guard
+      # insists on before it will run at all.
+      - name: End-to-end tests
+        run: npm run test:e2e
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USERNAME: root
+          DB_PASSWORD: root
+          DB_DATABASE: ecommerce_test
+          JWT_SECRET_KEY: ci-jwt-secret-key-at-least-32-characters-long
+          OTP_HASH_SECRET: ci-otp-hash-secret-at-least-32-characters-long
+          BACKEND_URL: http://localhost:3000
+          CORS_ORIGIN: "*"
+          ZARINPAL_MERCHANT_ID: "00000000-0000-0000-0000-000000000000"
+          TAX_RATE_PERCENT: "10"
+          THROTTLE_STORAGE: memory

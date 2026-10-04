@@ -1,0 +1,36 @@
+# Dependencies
+/node_modules
+
+# Production build output
+/dist
+/build
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Test coverage
+/coverage
+/.nyc_output
+
+# Temporary files
+.temp
+.tmp
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.sublime-workspace

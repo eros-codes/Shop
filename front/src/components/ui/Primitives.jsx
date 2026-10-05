@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Loader2, PackageSearch } from 'lucide-react';
+import { Loader2, PackageSearch, WifiOff } from 'lucide-react';
 import { formatToman } from '../../lib/format';
 
 export function Spinner({ size = 18 }) {
@@ -61,6 +61,23 @@ export function Price({ now, was, off, size }) {
         <span className="price-was">{formatToman(was, { withUnit: false })}</span>
       ) : null}
     </div>
+  );
+}
+
+// A request that failed is not the same as a shelf with nothing on it, and
+// the customer needs to be told which one they are looking at.
+export function ConnectionError({ onRetry }) {
+  return (
+    <EmptyState
+      icon={<WifiOff size={30} />}
+      title="ارتباط با سرور برقرار نشد"
+      description="اتصال اینترنت خود را بررسی کنید و دوباره تلاش کنید. اگر مشکل ادامه داشت، چند دقیقه بعد سر بزنید."
+      action={
+        <Button variant="primary" onClick={onRetry ?? (() => window.location.reload())}>
+          تلاش دوباره
+        </Button>
+      }
+    />
   );
 }
 

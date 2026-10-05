@@ -6,6 +6,7 @@ import { useCatalog } from '../context/CatalogContext';
 import ProductCard from '../components/product/ProductCard';
 import {
   Breadcrumb,
+  ConnectionError,
   EmptyState,
   Pagination,
   SkeletonCard,
@@ -22,7 +23,12 @@ const SORTS = [
 export default function Products() {
   const [params, setParams] = useSearchParams();
   const { categories, categoryById, brands } = useCatalog();
-  const [result, setResult] = useState({ items: [], total: 0, totalPages: 1 });
+  const [result, setResult] = useState({
+    items: [],
+    total: 0,
+    totalPages: 1,
+    failed: false,
+  });
   const [facets, setFacets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [priceDraft, setPriceDraft] = useState({ min: '', max: '' });
@@ -62,10 +68,14 @@ export default function Products() {
           items: data?.items ?? [],
           total: data?.total ?? 0,
           totalPages: data?.totalPages ?? 1,
+          failed: false,
         });
       })
       .catch(() => {
-        if (!cancelled) setResult({ items: [], total: 0, totalPages: 1 });
+        // Distinguish "nothing matched" from "we could not ask": the
+        // first invites the customer to loosen filters, the second does not.
+        if (!cancelled)
+          setResult({ items: [], total: 0, totalPages: 1, failed: true });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -412,6 +422,9 @@ export default function Products() {
             </div>
           ) : result.items.length === 0 ? (
             <div className="card">
+              {result.failed ? (
+                <ConnectionError />
+              ) : (
               <EmptyState
                 title="کالایی با این فیلترها پیدا نشد"
                 description="فیلترها را کمتر کنید یا عبارت دیگری جستجو کنید."
@@ -424,6 +437,7 @@ export default function Products() {
                   </button>
                 }
               />
+              )}
             </div>
           ) : (
             <>

@@ -4,10 +4,12 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { translateError } from '../../lib/errorMessages';
 import { Button, Field } from '../../components/ui/Primitives';
+import { useFieldErrors } from '../../lib/useFieldErrors';
 
 export default function ChangePassword() {
   const { changePassword, logout } = useAuth();
   const toast = useToast();
+  const fieldErrors = useFieldErrors();
   const navigate = useNavigate();
   const [form, setForm] = useState({ currentPassword: '', newPassword: '' });
   const [error, setError] = useState(null);
@@ -17,6 +19,7 @@ export default function ChangePassword() {
     event.preventDefault();
     setLoading(true);
     setError(null);
+    fieldErrors.clear();
     try {
       await changePassword(form);
       // Changing it signs every session out on the server, so the
@@ -25,7 +28,7 @@ export default function ChangePassword() {
       await logout();
       navigate('/login', { replace: true });
     } catch (apiError) {
-      setError(translateError(apiError));
+      if (!fieldErrors.capture(apiError, ['currentPassword', 'newPassword'])) setError(translateError(apiError));
     } finally {
       setLoading(false);
     }
@@ -35,7 +38,8 @@ export default function ChangePassword() {
     <form onSubmit={submit} className="card card-pad stack" style={{ maxWidth: 440 }}>
       <h1 style={{ fontSize: 17, fontWeight: 700 }}>تغییر رمز عبور</h1>
 
-      <Field label="رمز عبور فعلی">
+      <Field label="رمز عبور فعلی"
+                error={fieldErrors.of('currentPassword')}>
         <input
           className="input"
           type="password"
@@ -49,7 +53,7 @@ export default function ChangePassword() {
 
       <Field
         label="رمز عبور جدید"
-        error={error}
+        error={fieldErrors.of('newPassword') ?? error}
         hint="حداقل ۸ کاراکتر، شامل حرف بزرگ، حرف کوچک و عدد"
       >
         <input

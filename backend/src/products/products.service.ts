@@ -54,6 +54,8 @@ import { buildProductSearchPlan } from './utils/product-search';
 import { lockActiveProduct } from './utils/product-locks';
 import { lockUserRow } from '../users/utils/lock-user-row';
 import { ValidatedImage } from './pipes/product-images.pipe';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 export const PRODUCT_IMAGES_FOLDER = 'products';
 
@@ -567,6 +569,18 @@ export class ProductsService {
     return this.findOne(productId);
   }
 
+  // Bookmarks used to be write-only: rows went in and nothing ever read
+  // them back, so a signed-in customer's favourites vanished on refresh.
+  async listBookmarkedProductIds(userId: number): Promise<number[]> {
+    const rows = await this.dataSource
+      .createQueryBuilder(BookmarkProduct, 'bookmark')
+      .select('bookmark.product_id', 'productId')
+      .where('bookmark.user_id = :userId', { userId })
+      .orderBy('bookmark.id', 'DESC')
+      .getRawMany<{ productId: number }>();
+    return rows.map((row) => Number(row.productId));
+  }
+
   async toggleBookmark(
     userId: number,
     createBookmarkDto: CreateBookmarkDto,
@@ -662,7 +676,13 @@ export class ProductsService {
         categoryIds,
         values,
       );
-      await this.assertCombinationIsFree(manager, productId, values);
+      await this.assertCombinationIsFree(
+        manager,
+        productId,
+        values,
+        undefined,
+        dto.title,
+      );
 
       const title =
         dto.title ??
@@ -750,6 +770,7 @@ export class ProductsService {
           productId,
           values,
           variantId,
+          dto.title ?? variant.title,
         );
         await this.attributesService.replaceVariantValues(
           manager,
@@ -773,7 +794,23 @@ export class ProductsService {
       if (dto.title !== undefined) changes.title = dto.title;
       if (dto.sku !== undefined) changes.sku = dto.sku;
       if (dto.options !== undefined) changes.options = dto.options;
-      if (dto.stock !== undefined) changes.stock = dto.stock;
+      if (dto.stock !== undefined) {
+        // Optimistic check. The product row is locked above and checkout
+        // takes the same lock, so the stock read in this transaction is the
+        // live value - if it no longer matches what the editor saw, someone
+        // bought in the meantime and writing the old number would undo it.
+        if (
+          dto.expected_stock !== undefined &&
+          variant.stock !== dto.expected_stock
+        ) {
+          throw AppError.conflict(
+            ErrorCodes.STOCK_CHANGED,
+            'Stock changed since you opened this product - reload and try again',
+            { current: variant.stock, expected: dto.expected_stock },
+          );
+        }
+        changes.stock = dto.stock;
+      }
       if (dto.price !== undefined) changes.price = dto.price;
       if (dto.sale_price !== undefined) changes.sale_price = dto.sale_price;
       if (dto.weight_grams !== undefined)
@@ -847,16 +884,27 @@ export class ProductsService {
   // Two variants of one product cannot be the same combination: a
   // second "black / XL" would make stock for that combination
   // ambiguous, and the picker would show it twice.
+  //
+  // A variant with no options is identified by its title instead. Variants
+  // told apart only by name ("black", "white") are legitimate and are used
+  // that way, so an empty option list cannot simply be one shared key - but
+  // it cannot be skipped either, or a product ends up with two identical
+  // "Default" rows and its stock silently split between them.
+  private variantKey(values: ResolvedValue[], title?: string | null): string {
+    if (values.length > 0) return this.combinationKey(values);
+    const name = (title?.trim() || DEFAULT_VARIANT_TITLE).toLowerCase();
+    return `title:${name}`;
+  }
+
   private assertCombinationIsNew(
     seen: Set<string>,
     values: ResolvedValue[],
     label?: string,
   ): void {
-    if (values.length === 0) return;
-    const key = this.combinationKey(values);
+    const key = this.variantKey(values, label);
     if (seen.has(key)) {
       throw new BadRequestException(
-        `This product already has a variant for ${label ?? key}`,
+        `This product already has a variant for ${label || 'these options'}`,
       );
     }
     seen.add(key);
@@ -867,24 +915,40 @@ export class ProductsService {
     productId: number,
     values: ResolvedValue[],
     exceptVariantId?: number,
+    title?: string | null,
   ): Promise<void> {
-    if (values.length === 0) return;
+    // Seeded from the variants themselves, not from their attribute rows: a
+    // variant with no options has no rows at all, so building the map from
+    // rows alone made it invisible here.
+    const existing = await manager.getRepository(ProductVariant).find({
+      select: { id: true, title: true },
+      where: { product: { id: productId } },
+    });
+    const parts = new Map<number, string[]>();
+    const titles = new Map<number, string>();
+    for (const variant of existing) {
+      if (variant.id === exceptVariantId) continue;
+      parts.set(variant.id, []);
+      titles.set(variant.id, variant.title);
+    }
 
-    const siblings = await manager.getRepository(VariantAttributeValue).find({
+    const rows = await manager.getRepository(VariantAttributeValue).find({
       where: { variant: { product: { id: productId } } },
       relations: { variant: true, attribute: true, option: true },
     });
-    const byVariant = new Map<number, string[]>();
-    for (const row of siblings) {
+    for (const row of rows) {
       if (row.variant.id === exceptVariantId) continue;
-      const list = byVariant.get(row.variant.id) ?? [];
+      const list = parts.get(row.variant.id) ?? [];
       list.push(`${row.attribute.id}:${row.option.id}`);
-      byVariant.set(row.variant.id, list);
+      parts.set(row.variant.id, list);
     }
 
-    const wanted = this.combinationKey(values);
-    for (const parts of byVariant.values()) {
-      if (parts.sort().join('|') === wanted) {
+    const wanted = this.variantKey(values, title);
+    for (const [variantId, list] of parts) {
+      const key = list.length
+        ? list.sort().join('|')
+        : this.variantKey([], titles.get(variantId));
+      if (key === wanted) {
         throw new BadRequestException(
           'This product already has a variant with exactly these options',
         );

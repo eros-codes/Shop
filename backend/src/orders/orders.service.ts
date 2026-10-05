@@ -403,6 +403,11 @@ export class OrdersService {
               {
                 productId: product.id,
                 variantId: variant.id,
+                // The titles travel with the error so a client can name the
+                // offending line. In a multi-line basket "out of stock" on
+                // its own leaves the customer guessing which item to remove.
+                productTitle: product.title,
+                variantTitle: variant.title,
                 available: variant.stock,
                 requested: item.quantity,
               },

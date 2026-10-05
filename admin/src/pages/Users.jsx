@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { ShieldCheck, Users as UsersIcon, Wallet } from 'lucide-react';
-import { api, buildQuery } from '../lib/api';
+import { api, buildQuery, toPage } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { formatDate, formatToman } from '../lib/format';
@@ -23,6 +23,11 @@ export default function Users() {
   const [charging, setCharging] = useState(null);
   const [amount, setAmount] = useState('');
   const [saving, setSaving] = useState(false);
+  // setSaving only disables the button on the next render, so clicks landing
+  // in the same React tick all get through. This ref closes that window - it
+  // matters because a repeated submit fires side effects again and can leave
+  // duplicate rows wherever the database has no unique constraint.
+  const busyRef = useRef(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -31,11 +36,7 @@ export default function Users() {
         auth: true,
       })
       .then((data) =>
-        setResult({
-          items: data?.items ?? [],
-          total: data?.total ?? 0,
-          totalPages: data?.totalPages ?? 1,
-        }),
+        setResult(toPage(data, 20)),
       )
       .catch(() => setResult({ items: [], total: 0, totalPages: 1 }))
       .finally(() => setLoading(false));
@@ -68,6 +69,8 @@ export default function Users() {
 
   const charge = async (event) => {
     event.preventDefault();
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       await api.patch(
@@ -80,6 +83,7 @@ export default function Users() {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };

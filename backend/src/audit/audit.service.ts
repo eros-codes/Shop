@@ -18,7 +18,31 @@ export class AuditService {
   constructor(
     @InjectRepository(AuditLog)
     private readonly auditLogs: Repository<AuditLog>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
   ) {}
+
+  // Callers pass `label: currentUser.mobile`, but the access token only
+  // carries `sub` and `role` - so that was always undefined and every entry
+  // was stored with a null label, leaving the activity log unable to say who
+  // did anything. Resolving it here fixes every call site at once, keeps the
+  // customer's phone number out of a client-readable JWT, and cannot go
+  // stale the way a copy baked into a 15-minute token would.
+  private async resolveLabel(
+    actor?: AuditActor | null,
+  ): Promise<string | null> {
+    if (actor?.label) return actor.label;
+    if (!actor?.userId) return null;
+    try {
+      const user = await this.users.findOne({
+        select: { id: true, display_name: true, mobile: true },
+        where: { id: actor.userId },
+      });
+      return user?.display_name || user?.mobile || null;
+    } catch {
+      return null;
+    }
+  }
 
   async record(params: {
     action: string;
@@ -36,7 +60,7 @@ export class AuditService {
           actor: params.actor?.userId
             ? ({ id: params.actor.userId } as User)
             : null,
-          actor_label: params.actor?.label ?? null,
+          actor_label: await this.resolveLabel(params.actor),
           changes: params.changes ?? null,
         }),
       );

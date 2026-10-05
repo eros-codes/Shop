@@ -4,10 +4,12 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { Button, Field } from '../components/ui/Primitives';
+import { useFieldErrors } from '../lib/useFieldErrors';
 
 export default function Register() {
   const { register, verifyOtp } = useAuth();
   const toast = useToast();
+  const fieldErrors = useFieldErrors();
   const navigate = useNavigate();
   const [stage, setStage] = useState('form');
   const [form, setForm] = useState({ display_name: '', mobile: '', password: '' });
@@ -19,6 +21,7 @@ export default function Register() {
     event.preventDefault();
     setLoading(true);
     setError(null);
+    fieldErrors.clear();
     try {
       await register({
         display_name: form.display_name.trim(),
@@ -28,7 +31,9 @@ export default function Register() {
       setStage('otp');
       toast.success('کد تأیید برای شما پیامک شد');
     } catch (apiError) {
-      setError(translateError(apiError));
+      // Field problems go under their own inputs; anything else (a number
+      // that is already registered, say) keeps the general message.
+      if (!fieldErrors.capture(apiError, ['display_name', 'mobile', 'password'])) setError(translateError(apiError));
     } finally {
       setLoading(false);
     }
@@ -60,7 +65,8 @@ export default function Register() {
             </p>
 
             <form onSubmit={submitForm} className="stack">
-              <Field label="نام و نام خانوادگی">
+              <Field label="نام و نام خانوادگی"
+                error={fieldErrors.of('display_name')}>
                 <input
                   className="input"
                   value={form.display_name}
@@ -74,7 +80,8 @@ export default function Register() {
                 />
               </Field>
 
-              <Field label="شماره موبایل">
+              <Field label="شماره موبایل"
+                error={fieldErrors.of('mobile')}>
                 <input
                   className="input"
                   inputMode="numeric"
@@ -89,7 +96,7 @@ export default function Register() {
 
               <Field
                 label="رمز عبور"
-                error={error}
+                error={fieldErrors.of('password') ?? error}
                 hint="حداقل ۸ کاراکتر، شامل حرف بزرگ، حرف کوچک و عدد"
               >
                 <input

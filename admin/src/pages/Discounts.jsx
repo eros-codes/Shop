@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { Percent, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { formatDate, formatToman } from '../lib/format';
+import { useFieldErrors } from '../lib/useFieldErrors';
 import {
   Button,
   Confirm,
+  ConnectionError,
   EmptyState,
   Field,
   Modal,
@@ -17,20 +19,33 @@ const toDateInput = (value) => (value ? String(value).slice(0, 10) : '');
 
 export default function Discounts() {
   const toast = useToast();
+  const fieldErrors = useFieldErrors();
   const [codes, setCodes] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Tracked separately from the data so a dead connection is not rendered as
+  // an empty table - the two look identical to the admin otherwise.
+  const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(null);
   const [removing, setRemoving] = useState(null);
   const [type, setType] = useState('percent');
   const [saving, setSaving] = useState(false);
+  // setSaving only disables the button on the next render, so clicks landing
+  // in the same React tick all get through. This ref closes that window - it
+  // matters because a repeated submit fires side effects again and can leave
+  // duplicate rows wherever the database has no unique constraint.
+  const busyRef = useRef(false);
 
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     api
       .get('/discount-codes?limit=100', { auth: true })
       .then((data) => setCodes(data?.items ?? data ?? []))
-      .catch(() => setCodes([]))
+      .catch(() => {
+        setCodes([]);
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
     api.get('/categories').then((data) => setCategories(data?.items ?? data ?? [])).catch(() => {});
   }, []);
@@ -65,6 +80,8 @@ export default function Discounts() {
       categoryIds: [...(form.getAll('categoryIds') ?? [])].map(Number).filter(Boolean),
     };
 
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       if (editing.id) {
@@ -73,11 +90,17 @@ export default function Discounts() {
         await api.post('/discount-codes', payload, { auth: true });
       }
       toast.success('کد تخفیف ذخیره شد');
+      fieldErrors.clear();
       setEditing(null);
       load();
     } catch (error) {
-      toast.error(translateError(error));
+      if (fieldErrors.capture(error, ['code', 'type', 'capacity', 'off_percent', 'off_amount', 'max_discount_amount', 'min_order_amount', 'starts_at', 'expires_at', 'per_user_limit'])) {
+        toast.error('چند مورد از فرم نیاز به اصلاح دارد.');
+      } else {
+        toast.error(translateError(error));
+      }
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };
@@ -112,6 +135,8 @@ export default function Discounts() {
       <section className="card">
         {loading ? (
           <TableSkeleton cols={6} />
+        ) : failed ? (
+          <ConnectionError onRetry={load} />
         ) : codes.length === 0 ? (
           <EmptyState icon={<Percent size={26} />} title="کد تخفیفی ثبت نشده است" />
         ) : (
@@ -190,9 +215,11 @@ export default function Discounts() {
           title={editing.id ? 'ویرایش کد تخفیف' : 'کد تخفیف جدید'}
           onClose={() => setEditing(null)}
         >
-          <form onSubmit={save} className="stack">
+          <form onSubmit={save}
+            onInput={(event) => fieldErrors.clearField(event.target.name)} className="stack">
             <div className="grid cols-3">
-              <Field label="کد">
+              <Field label="کد"
+            error={fieldErrors.of('code')}>
                 <input
                   className="input"
                   name="code"
@@ -201,7 +228,8 @@ export default function Discounts() {
                   required
                 />
               </Field>
-              <Field label="نوع">
+              <Field label="نوع"
+            error={fieldErrors.of('type')}>
                 <select
                   className="select"
                   value={type}
@@ -211,7 +239,8 @@ export default function Discounts() {
                   <option value="fixed">مبلغ ثابت</option>
                 </select>
               </Field>
-              <Field label="ظرفیت کل">
+              <Field label="ظرفیت کل"
+            error={fieldErrors.of('capacity')}>
                 <input
                   className="input"
                   name="capacity"
@@ -224,7 +253,8 @@ export default function Discounts() {
 
             <div className="grid cols-3">
               {type === 'percent' ? (
-                <Field label="درصد تخفیف">
+                <Field label="درصد تخفیف"
+            error={fieldErrors.of('off_percent')}>
                   <input
                     className="input"
                     name="off_percent"
@@ -233,7 +263,8 @@ export default function Discounts() {
                   />
                 </Field>
               ) : (
-                <Field label="مبلغ تخفیف (تومان)">
+                <Field label="مبلغ تخفیف (تومان)"
+            error={fieldErrors.of('off_amount')}>
                   <input
                     className="input"
                     name="off_amount"
@@ -243,7 +274,8 @@ export default function Discounts() {
                 </Field>
               )}
 
-              <Field label="سقف تخفیف" hint="برای کدهای درصدی">
+              <Field label="سقف تخفیف"
+            error={fieldErrors.of('max_discount_amount')} hint="برای کدهای درصدی">
                 <input
                   className="input"
                   name="max_discount_amount"
@@ -252,7 +284,8 @@ export default function Discounts() {
                 />
               </Field>
 
-              <Field label="حداقل مبلغ سبد">
+              <Field label="حداقل مبلغ سبد"
+            error={fieldErrors.of('min_order_amount')}>
                 <input
                   className="input"
                   name="min_order_amount"
@@ -263,7 +296,8 @@ export default function Discounts() {
             </div>
 
             <div className="grid cols-3">
-              <Field label="شروع کمپین">
+              <Field label="شروع کمپین"
+            error={fieldErrors.of('starts_at')}>
                 <input
                   className="input"
                   type="date"
@@ -271,7 +305,8 @@ export default function Discounts() {
                   defaultValue={toDateInput(editing.starts_at)}
                 />
               </Field>
-              <Field label="پایان کمپین">
+              <Field label="پایان کمپین"
+            error={fieldErrors.of('expires_at')}>
                 <input
                   className="input"
                   type="date"
@@ -279,7 +314,8 @@ export default function Discounts() {
                   defaultValue={toDateInput(editing.expires_at)}
                 />
               </Field>
-              <Field label="سقف استفاده هر کاربر">
+              <Field label="سقف استفاده هر کاربر"
+            error={fieldErrors.of('per_user_limit')}>
                 <input
                   className="input"
                   name="per_user_limit"

@@ -13,6 +13,8 @@ const MESSAGES = {
   TOO_MANY_REQUESTS: 'تعداد درخواست‌ها زیاد بود؛ کمی بعد دوباره تلاش کنید.',
   INTERNAL_ERROR: 'خطایی در سرور رخ داد. لطفاً دوباره تلاش کنید.',
 
+  STOCK_CHANGED:
+    'موجودی این گزینه از وقتی صفحه را باز کردید تغییر کرده (احتمالاً فروش رفته). صفحه را تازه کنید و دوباره ذخیره کنید.',
   INSUFFICIENT_STOCK: 'موجودی کافی نیست.',
   OUT_OF_STOCK: 'این کالا موجود نیست.',
   VARIANT_REQUIRED: 'لطفاً یکی از گزینه‌های این کالا را انتخاب کنید.',
@@ -35,6 +37,8 @@ const MESSAGES = {
   WALLET_INACTIVE: 'کیف پول شما غیرفعال است.',
   PAYMENT_GATEWAY_UNAVAILABLE: 'درگاه پرداخت در دسترس نیست؛ کمی بعد تلاش کنید.',
   AMOUNT_TOO_LARGE: 'مبلغ از حد مجاز بیشتر است.',
+  FILE_TOO_LARGE:
+    'حجم فایل بیشتر از حد مجاز است؛ تصویری کوچک‌تر از ۵ مگابایت انتخاب کنید.',
 
   DISCOUNT_NOT_FOUND: 'کد تخفیف معتبر نیست.',
   DISCOUNT_EXHAUSTED: 'ظرفیت این کد تخفیف تمام شده است.',
@@ -84,7 +88,12 @@ export function translateError(error) {
   if (detailed) return detailed;
 
   if (code === 'VALIDATION_FAILED' && fieldErrors?.length) {
-    return fieldErrors[0];
+    // Field errors come straight from the server's DTO validators, which
+    // are written in English. Showing one verbatim put "Title cannot be
+    // empty" in front of a Persian-speaking user. Only pass it through when
+    // it is already Persian; otherwise fall back to the generic wording.
+    const first = fieldErrors.find((m) => /[\u0600-\u06FF]/.test(m));
+    if (first) return first;
   }
 
   return MESSAGES[code] ?? error.message ?? MESSAGES.INTERNAL_ERROR;

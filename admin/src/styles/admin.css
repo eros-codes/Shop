@@ -242,6 +242,18 @@ img {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Was an inline style, which no media query can override - the dashboard
+   kept its two columns on a phone and dragged the page sideways. */
+.grid.cols-wide-narrow {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+}
+
+/* A grid item's default min-width is its content, so one wide child (the
+   14-day chart) widens its track no matter what the template says. */
+.grid > * {
+  min-width: 0;
+}
+
 .cols-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -668,10 +680,18 @@ table.data tbody tr:last-child td {
   gap: 6px;
   height: 190px;
   padding-top: 10px;
+  /* Each column carries a date label, so it will not shrink below about
+     31px - fourteen of those are wider than a phone and used to drag the
+     whole dashboard sideways. Scrolling the chart keeps the bars readable
+     instead of squeezing them into unreadable slivers. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .chart-col {
-  flex: 1;
+  flex: 1 0 auto;
+  min-width: 30px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -867,6 +887,15 @@ table.data tbody tr:last-child td {
 }
 
 @media (max-width: 900px) {
+  .grid.cols-wide-narrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chart {
+    height: 170px;
+  }
+  .chart-col {
+    min-width: 28px;
+  }
   .shell {
     grid-template-columns: 1fr;
   }
@@ -893,4 +922,19 @@ table.data tbody tr:last-child td {
   .rail-toggle {
     display: none;
   }
+}
+
+/* Field-level validation messages from the API, one under each input. */
+.field-error {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger-600, #c0392b);
+  line-height: 1.6;
+}
+
+.field.has-error .input,
+.field.has-error input,
+.field.has-error select,
+.field.has-error textarea {
+  border-color: var(--danger-600, #c0392b);
 }

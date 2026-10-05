@@ -27,6 +27,46 @@ export function WishlistProvider({ children }) {
     }
   });
 
+  // Two stores, one list. A guest's favourites live in this browser; once
+  // they sign in the server list is the truth, so it is loaded and the guest
+  // list is folded into it rather than being quietly dropped. Without this
+  // the hearts were initialised from localStorage exactly once, so a
+  // signed-in customer's favourites disappeared on the next refresh even
+  // though the rows were sitting on the server.
+  useEffect(() => {
+    let cancelled = false;
+    if (!isAuthenticated) return undefined;
+
+    (async () => {
+      try {
+        const guest = new Set(
+          JSON.parse(localStorage.getItem(GUEST_KEY) ?? '[]'),
+        );
+        const result = await api.get('/products/bookmark', { auth: true });
+        const server = new Set((result?.productIds ?? []).map(Number));
+
+        const toPush = [...guest].filter((id) => !server.has(id));
+        await Promise.all(
+          toPush.map((id) =>
+            api
+              .post('/products/bookmark', { product_id: id }, { auth: true })
+              .catch(() => null),
+          ),
+        );
+        toPush.forEach((id) => server.add(id));
+
+        localStorage.removeItem(GUEST_KEY);
+        if (!cancelled) setIds(server);
+      } catch {
+        // Offline or a stale token: keep whatever is on screen.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, user?.id]);
+
   const toggle = useCallback(
     async (productId) => {
       const next = new Set(ids);

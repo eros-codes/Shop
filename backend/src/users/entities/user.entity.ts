@@ -59,6 +59,16 @@ export class User {
   @OneToOne(() => Wallet, (wallet) => wallet.user)
   wallet?: Wallet;
 
+  // Tokens issued before this instant are refused. Set whenever the
+  // password changes; see the JWT strategy for how it is checked.
+  @Column({
+    type: 'datetime',
+    precision: 3,
+    nullable: true,
+    select: false,
+  })
+  tokens_valid_after?: Date | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

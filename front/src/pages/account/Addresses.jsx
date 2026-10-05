@@ -4,9 +4,11 @@ import { api } from '../../lib/api';
 import { useToast } from '../../context/ToastContext';
 import { translateError } from '../../lib/errorMessages';
 import { Button, EmptyState, Field } from '../../components/ui/Primitives';
+import { useFieldErrors } from '../../lib/useFieldErrors';
 
 export default function Addresses() {
   const toast = useToast();
+  const fieldErrors = useFieldErrors();
   const [addresses, setAddresses] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -37,10 +39,15 @@ export default function Addresses() {
         { auth: true },
       );
       toast.success('آدرس اضافه شد');
+      fieldErrors.clear();
       setShowForm(false);
       load();
     } catch (error) {
-      toast.error(translateError(error));
+      if (fieldErrors.capture(error, ['province', 'city', 'address', 'postal_code', 'receiver_mobile'])) {
+        toast.error('چند مورد از فرم نیاز به اصلاح دارد.');
+      } else {
+        toast.error(translateError(error));
+      }
     } finally {
       setSaving(false);
     }
@@ -67,23 +74,29 @@ export default function Addresses() {
       </div>
 
       {showForm ? (
-        <form onSubmit={save} className="card card-pad stack">
+        <form onSubmit={save}
+            onInput={(event) => fieldErrors.clearField(event.target.name)} className="card card-pad stack">
           <div className="grid auto-grid">
-            <Field label="استان">
+            <Field label="استان"
+                error={fieldErrors.of('province')}>
               <input className="input" name="province" required />
             </Field>
-            <Field label="شهر">
+            <Field label="شهر"
+                error={fieldErrors.of('city')}>
               <input className="input" name="city" required />
             </Field>
           </div>
-          <Field label="نشانی کامل">
+          <Field label="نشانی کامل"
+                error={fieldErrors.of('address')}>
             <textarea className="textarea" name="address" required />
           </Field>
           <div className="grid auto-grid">
-            <Field label="کد پستی">
+            <Field label="کد پستی"
+                error={fieldErrors.of('postal_code')}>
               <input className="input" name="postal_code" inputMode="numeric" maxLength={10} required />
             </Field>
-            <Field label="موبایل تحویل‌گیرنده">
+            <Field label="موبایل تحویل‌گیرنده"
+                error={fieldErrors.of('receiver_mobile')}>
               <input className="input" name="receiver_mobile" inputMode="numeric" required />
             </Field>
           </div>

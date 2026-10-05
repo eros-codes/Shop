@@ -2,17 +2,27 @@ import { useEffect, useState } from 'react';
 import { Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatToman } from '../lib/format';
-import { EmptyState, TableSkeleton } from '../components/Primitives';
+import {
+  ConnectionError,
+  EmptyState,
+  TableSkeleton,
+} from '../components/Primitives';
 
 export default function Wallets() {
   const [wallets, setWallets] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Tracked separately from the data so a dead connection is not rendered as
+  // an empty table - the two look identical to the admin otherwise.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     api
       .get('/wallets?limit=100', { auth: true })
       .then((data) => setWallets(data?.items ?? data ?? []))
-      .catch(() => setWallets([]))
+      .catch(() => {
+        setWallets([]);
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -30,6 +40,8 @@ export default function Wallets() {
       <section className="card">
         {loading ? (
           <TableSkeleton cols={4} />
+        ) : failed ? (
+          <ConnectionError />
         ) : wallets.length === 0 ? (
           <EmptyState icon={<Wallet size={26} />} title="کیف پولی ساخته نشده است" />
         ) : (

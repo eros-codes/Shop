@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Check, MessageSquare, Trash2, X } from 'lucide-react';
-import { api, buildQuery } from '../lib/api';
+import { api, buildQuery, toPage } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { formatDate } from '../lib/format';
@@ -30,7 +30,7 @@ export default function Comments() {
       .get(`/comments${buildQuery({ status: status || undefined, limit: 50 })}`, {
         auth: true,
       })
-      .then((data) => setItems(data?.items ?? []))
+      .then((data) => setItems(toPage(data, 50).items))
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
   }, [status]);

@@ -181,3 +181,28 @@ export function buildQuery(params) {
   const query = search.toString();
   return query ? `?${query}` : '';
 }
+
+/**
+ * Normalises a list response into { items, total, totalPages }.
+ *
+ * Most list endpoints return a paginated envelope, but a few (/users,
+ * /comments) hand back a bare array. Reading `data.items` from those gave
+ * undefined, which rendered as "nothing found" - the users list and the
+ * comment moderation screen were permanently empty even though the API was
+ * answering with rows. Accepting either shape keeps those pages working
+ * whichever envelope the endpoint uses.
+ */
+export function toPage(data, fallbackLimit = 20) {
+  if (Array.isArray(data)) {
+    return {
+      items: data,
+      total: data.length,
+      totalPages: Math.max(1, Math.ceil(data.length / fallbackLimit)),
+    };
+  }
+  return {
+    items: data?.items ?? [],
+    total: data?.total ?? 0,
+    totalPages: data?.totalPages ?? 1,
+  };
+}

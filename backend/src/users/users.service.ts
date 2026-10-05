@@ -59,9 +59,11 @@ export class UsersService {
   // Used by the password flows. Sessions are revoked by the caller,
   // which is the part that actually locks an attacker out.
   async setPassword(id: number, hashedPassword: string): Promise<void> {
+    // Both the reset and the signed-in change come through here, so this is
+    // the one place that has to retire the tokens already issued.
     const result = await this.userRepository.update(
       { id },
-      { password: hashedPassword },
+      { password: hashedPassword, tokens_valid_after: new Date() },
     );
     if (!result.affected) {
       throw new NotFoundException(`User with id ${id} not found`);

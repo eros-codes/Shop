@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { api, buildQuery } from '../lib/api';
 import { useToast } from '../context/ToastContext';
@@ -23,6 +23,11 @@ export default function Returns() {
   const [restock, setRestock] = useState(true);
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  // setSaving only disables the button on the next render, so clicks landing
+  // in the same React tick all get through. This ref closes that window - it
+  // matters because a repeated submit fires side effects again and can leave
+  // duplicate rows wherever the database has no unique constraint.
+  const busyRef = useRef(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -38,6 +43,8 @@ export default function Returns() {
   useEffect(load, [load]);
 
   const resolve = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       await api.patch(
@@ -57,6 +64,7 @@ export default function Returns() {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };

@@ -3,6 +3,7 @@ import { ScrollText } from 'lucide-react';
 import { api, buildQuery } from '../lib/api';
 import { formatDateTime } from '../lib/format';
 import {
+  ConnectionError,
   EmptyState,
   Pagination,
   TableSkeleton,
@@ -27,11 +28,14 @@ const ACTIONS = {
 export default function AuditLog() {
   const [result, setResult] = useState({ items: [], total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
+  // A failed fetch is not "no events have ever been recorded".
+  const [failed, setFailed] = useState(false);
   const [page, setPage] = useState(1);
   const [action, setAction] = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     api
       .get(
         `/audit-logs${buildQuery({ page, limit: 25, action: action || undefined })}`,
@@ -44,7 +48,10 @@ export default function AuditLog() {
           totalPages: data?.totalPages ?? 1,
         }),
       )
-      .catch(() => setResult({ items: [], total: 0, totalPages: 1 }))
+            .catch(() => {
+        setResult({ items: [], total: 0, totalPages: 1 });
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
   }, [page, action]);
 
@@ -80,6 +87,8 @@ export default function AuditLog() {
       <section className="card">
         {loading ? (
           <TableSkeleton cols={4} />
+        ) : failed ? (
+          <ConnectionError onRetry={load} />
         ) : result.items.length === 0 ? (
           <EmptyState icon={<ScrollText size={26} />} title="رویدادی ثبت نشده است" />
         ) : (

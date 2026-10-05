@@ -119,6 +119,17 @@ export class ProductsController {
   }
 
   // "You might also like", from the same categories and brand.
+  // Declared above @Get(':id') on purpose: Nest matches routes in order, so
+  // a literal segment registered after the wildcard is read as an id.
+  @UseGuards(JwtAuthGuard)
+  @Get('bookmark')
+  async listBookmarks(@CurrentUser() currentUser: CurrentUserPayload) {
+    const productIds = await this.productsService.listBookmarkedProductIds(
+      currentUser.userId,
+    );
+    return { data: { productIds }, message: 'Bookmarks fetched successfully' };
+  }
+
   @Get(':id/related')
   async related(
     @Param('id', ParseIdPipe) id: number,

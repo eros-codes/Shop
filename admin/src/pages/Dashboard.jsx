@@ -92,7 +92,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: '1.6fr 1fr' }}>
+      <div className="grid cols-wide-narrow">
         <section className="card">
           <div className="card-head">
             <h2 className="card-title">فروش ۱۴ روز اخیر</h2>

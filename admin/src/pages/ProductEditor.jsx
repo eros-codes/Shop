@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { ImageOff, Plus, Trash2, Upload } from 'lucide-react';
 import { api, request } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { imageUrl } from '../lib/format';
 import { Button, Field, Modal } from '../components/Primitives';
+import { useFieldErrors } from '../lib/useFieldErrors';
 
 const EMPTY = {
   title: '',
@@ -31,6 +32,7 @@ const emptyVariant = () => ({
 
 export default function ProductEditor({ mode, productId, onClose, onSaved }) {
   const toast = useToast();
+  const fieldErrors = useFieldErrors();
   const isEdit = mode === 'edit';
 
   const [form, setForm] = useState(EMPTY);
@@ -42,6 +44,11 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
+  // setSaving only disables the button on the next render, so clicks landing
+  // in the same React tick all get through. This ref closes that window - it
+  // matters because a repeated submit fires side effects again and can leave
+  // duplicate rows wherever the database has no unique constraint.
+  const busyRef = useRef(false);
   const [tab, setTab] = useState('general');
 
   useEffect(() => {
@@ -82,6 +89,22 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
           is_published: product.is_published ?? true,
         });
         setImages(product.images ?? []);
+        loadedVariants.current = new Map(
+          (product.variants ?? []).map((variant) => [
+            variant.id,
+            {
+              title: variant.title ?? '',
+              sku: variant.sku ?? '',
+              stock: Number(variant.stock) || 0,
+              price: variant.price ?? '',
+              attributes: JSON.stringify(
+                (variant.attributeValues ?? [])
+                  .map((value) => [value.attribute.id, value.option.id])
+                  .sort((a, b) => a[0] - b[0]),
+              ),
+            },
+          ]),
+        );
         setVariants(
           (product.variants ?? []).map((variant) => ({
             key: `v${variant.id}`,
@@ -125,6 +148,12 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
+  // The variants as they were when the editor opened, keyed by id. Saving
+  // used to PATCH every variant with the stock it had at that moment, so a
+  // sale made while the editor was open was silently written back over -
+  // even when the admin had only touched the description.
+  const loadedVariants = useRef(new Map());
+
   const variantPayload = (variant) => ({
     ...(variant.title.trim() ? { title: variant.title.trim() } : {}),
     ...(variant.sku.trim() ? { sku: variant.sku.trim() } : {}),
@@ -137,6 +166,31 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
         optionId: Number(optionId),
       })),
   });
+
+  // Returns only the fields the admin actually changed, or null if nothing
+  // did. Stock goes out with the value the editor loaded, so the server can
+  // refuse the write if units were sold in the meantime.
+  const changedFields = (variant, payload) => {
+    const before = loadedVariants.current.get(variant.id);
+    if (!before) return payload;
+    const out = {};
+    if ((payload.title ?? '') !== before.title) out.title = payload.title;
+    if ((payload.sku ?? '') !== before.sku) out.sku = payload.sku;
+    if (String(payload.price ?? '') !== String(before.price ?? '')) {
+      if (payload.price !== undefined) out.price = payload.price;
+    }
+    const attrs = JSON.stringify(
+      payload.attributes
+        .map((a) => [a.attributeId, a.optionId])
+        .sort((a, b) => a[0] - b[0]),
+    );
+    if (attrs !== before.attributes) out.attributes = payload.attributes;
+    if (payload.stock !== before.stock) {
+      out.stock = payload.stock;
+      out.expected_stock = before.stock;
+    }
+    return Object.keys(out).length ? out : null;
+  };
 
   const descriptivePayload = () =>
     Object.entries(productAttributes)
@@ -163,7 +217,10 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
       .filter(Boolean);
 
   const save = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
+    let stage = 'product';
     try {
       const base = {
         title: form.title.trim(),
@@ -179,17 +236,22 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
         attributes: descriptivePayload(),
       };
 
+      fieldErrors.clear();
       if (isEdit) {
+        stage = 'product';
         await api.patch(`/products/${productId}`, base, { auth: true });
+        stage = 'variants';
 
         // Variants are their own resources: new rows are added, existing
         // ones patched. Stock stays where it belongs - on the variant.
         for (const variant of variants) {
           const payload = variantPayload(variant);
           if (variant.id) {
+            const changed = changedFields(variant, payload);
+            if (changed === null) continue; // untouched: leave it alone
             await api.patch(
               `/products/${productId}/variants/${variant.id}`,
-              payload,
+              changed,
               { auth: true },
             );
           } else {
@@ -200,6 +262,7 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
         }
         toast.success('کالا به‌روز شد');
       } else {
+        stage = 'product';
         await api.post(
           '/products',
           {
@@ -213,8 +276,17 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
       }
       onSaved();
     } catch (error) {
-      toast.error(translateError(error));
+      // Only the product's own request maps onto these inputs. On create the
+      // variants travel inside it as variants.N.*, which have no input of
+      // their own here, so capture() reports them as not shown and the
+      // message goes to the toast instead.
+      if (stage === 'product' && fieldErrors.capture(error, ['title', 'description', 'price', 'sale_price', 'weight_grams', 'brandId', 'categoryIds'])) {
+        toast.error('چند مورد از فرم نیاز به اصلاح دارد.');
+      } else {
+        toast.error(translateError(error));
+      }
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };
@@ -312,7 +384,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
 
           {tab === 'general' ? (
             <div className="stack">
-              <Field label="عنوان کالا">
+              <Field label="عنوان کالا"
+            error={fieldErrors.of('title')}>
                 <input
                   className="input"
                   value={form.title}
@@ -320,7 +393,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                 />
               </Field>
 
-              <Field label="توضیحات">
+              <Field label="توضیحات"
+            error={fieldErrors.of('description')}>
                 <textarea
                   className="textarea"
                   value={form.description}
@@ -329,7 +403,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
               </Field>
 
               <div className="grid cols-3">
-                <Field label="قیمت (تومان)">
+                <Field label="قیمت (تومان)"
+            error={fieldErrors.of('price')}>
                   <input
                     className="input"
                     inputMode="numeric"
@@ -339,7 +414,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                     }
                   />
                 </Field>
-                <Field label="قیمت حراج" hint="خالی یعنی بدون حراج">
+                <Field label="قیمت حراج"
+            error={fieldErrors.of('sale_price')} hint="خالی یعنی بدون حراج">
                   <input
                     className="input"
                     inputMode="numeric"
@@ -349,7 +425,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                     }
                   />
                 </Field>
-                <Field label="وزن (گرم)" hint="برای محاسبه هزینه ارسال">
+                <Field label="وزن (گرم)"
+            error={fieldErrors.of('weight_grams')} hint="برای محاسبه هزینه ارسال">
                   <input
                     className="input"
                     inputMode="numeric"
@@ -362,7 +439,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
               </div>
 
               <div className="grid cols-2">
-                <Field label="برند">
+                <Field label="برند"
+            error={fieldErrors.of('brandId')}>
                   <select
                     className="select"
                     value={form.brandId}
@@ -377,7 +455,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                   </select>
                 </Field>
 
-                <Field label="دسته‌بندی‌ها" hint="می‌توانید چند مورد انتخاب کنید">
+                <Field label="دسته‌بندی‌ها"
+            error={fieldErrors.of('categoryIds')} hint="می‌توانید چند مورد انتخاب کنید">
                   <select
                     className="select"
                     multiple

@@ -19,7 +19,7 @@ import {
 import { api, buildQuery } from '../lib/api';
 import { useCatalog } from '../context/CatalogContext';
 import ProductCard from '../components/product/ProductCard';
-import { SkeletonCard } from '../components/ui/Primitives';
+import { ConnectionError, SkeletonCard } from '../components/ui/Primitives';
 import { coverImage } from '../lib/format';
 
 // Banner artwork lives in `public/banners/`: drop a file there and name
@@ -67,7 +67,7 @@ const TRUST = [
 ];
 
 function useProducts(query) {
-  const [state, setState] = useState({ items: [], loading: true });
+  const [state, setState] = useState({ items: [], loading: true, failed: false });
   const key = useMemo(() => buildQuery(query), [query]);
 
   useEffect(() => {
@@ -78,10 +78,13 @@ function useProducts(query) {
       .get(`/products${key}`)
       .then((data) => {
         if (cancelled) return;
-        setState({ items: data?.items ?? [], loading: false });
+        setState({ items: data?.items ?? [], loading: false, failed: false });
       })
       .catch(() => {
-        if (!cancelled) setState({ items: [], loading: false });
+        // A failed request is not an empty shop. Collapsing the two left the
+        // page looking like a store with nothing in it whenever the API was
+        // unreachable, with nothing on screen to explain why.
+        if (!cancelled) setState({ items: [], loading: false, failed: true });
       });
 
     return () => {
@@ -92,8 +95,8 @@ function useProducts(query) {
   return state;
 }
 
-function Row({ title, icon, link, products, loading }) {
-  if (!loading && products.length === 0) return null;
+function Row({ title, icon, link, products, loading, failed }) {
+  if (!loading && !failed && products.length === 0) return null;
 
   return (
     <section className="section">
@@ -107,13 +110,19 @@ function Row({ title, icon, link, products, loading }) {
           <ArrowLeft size={15} />
         </Link>
       </div>
-      <div className="product-grid">
-        {loading
-          ? Array.from({ length: 5 }).map((_, index) => <SkeletonCard key={index} />)
-          : products.map((product) => (
-              <ProductCard key={product.id} product={product} />
-            ))}
-      </div>
+      {failed && !loading ? (
+        <ConnectionError />
+      ) : (
+        <div className="product-grid">
+          {loading
+            ? Array.from({ length: 5 }).map((_, index) => (
+                <SkeletonCard key={index} />
+              ))
+            : products.map((product) => (
+                <ProductCard key={product.id} product={product} />
+              ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -255,6 +264,7 @@ export default function Home() {
         link="/products?sortBy=best_selling"
         products={bestSellers.items}
         loading={bestSellers.loading}
+          failed={bestSellers.failed}
       />
 
       <Row
@@ -262,6 +272,7 @@ export default function Home() {
         link="/products?onSale=true"
         products={onSale.items}
         loading={onSale.loading}
+          failed={onSale.failed}
       />
 
       <Row
@@ -269,6 +280,7 @@ export default function Home() {
         link="/products?sortBy=created_at"
         products={newest.items}
         loading={newest.loading}
+          failed={newest.failed}
       />
 
       {brands.length > 0 ? (

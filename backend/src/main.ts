@@ -2,7 +2,7 @@ import './instrument';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { createValidationPipe } from './common/validation/persian-validation';
 import helmet from 'helmet';
 import { timingSafeEqual } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
@@ -75,13 +75,7 @@ async function bootstrap() {
     credentials: true,
   });
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  app.useGlobalPipes(createValidationPipe());
 
   const isProduction = process.env.NODE_ENV === 'production';
   const swaggerEnabled =

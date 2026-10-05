@@ -19,6 +19,7 @@ export const ErrorCodes = {
 
   // Catalogue and stock
   INSUFFICIENT_STOCK: 'INSUFFICIENT_STOCK',
+  STOCK_CHANGED: 'STOCK_CHANGED',
   OUT_OF_STOCK: 'OUT_OF_STOCK',
   VARIANT_REQUIRED: 'VARIANT_REQUIRED',
   VARIANT_NOT_FOUND: 'VARIANT_NOT_FOUND',
@@ -42,6 +43,7 @@ export const ErrorCodes = {
   WALLET_INACTIVE: 'WALLET_INACTIVE',
   PAYMENT_GATEWAY_UNAVAILABLE: 'PAYMENT_GATEWAY_UNAVAILABLE',
   AMOUNT_TOO_LARGE: 'AMOUNT_TOO_LARGE',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
 
   // Discounts
   DISCOUNT_NOT_FOUND: 'DISCOUNT_NOT_FOUND',
@@ -76,5 +78,9 @@ export const STATUS_FALLBACK_CODES: Record<number, ErrorCode> = {
   403: ErrorCodes.FORBIDDEN,
   404: ErrorCodes.NOT_FOUND,
   409: ErrorCodes.CONFLICT,
+  // Multer rejects an oversized upload with a bare 413, so without this the
+  // admin was shown the generic "internal error" wording for a file that is
+  // simply too big - nothing to act on.
+  413: ErrorCodes.FILE_TOO_LARGE,
   429: ErrorCodes.TOO_MANY_REQUESTS,
 };

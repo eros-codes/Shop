@@ -1,10 +1,11 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import { createValidationPipe } from '../src/common/validation/persian-validation';
 import { User } from '../src/users/entities/user.entity';
 import { Wallet } from '../src/wallets/entities/wallet.entity';
 import { Address } from '../src/address/entities/address.entity';
@@ -23,13 +24,9 @@ export async function bootApp(): Promise<INestApplication> {
 
   const app = moduleFixture.createNestApplication();
   app.use(cookieParser());
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  // Built from the same function main.ts uses, so the suite exercises the
+  // exact pipe production runs - including its Persian messages.
+  app.useGlobalPipes(createValidationPipe());
   await app.init();
   return app;
 }

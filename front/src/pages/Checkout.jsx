@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   BadgePercent,
@@ -39,6 +39,16 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState('wallet');
   const [wallet, setWallet] = useState(null);
   const [placing, setPlacing] = useState(false);
+  // `placing` cannot guard the submit on its own: setState is asynchronous,
+  // so several fast clicks all run placeOrder before React re-renders and
+  // disables the button. This ref is read and written synchronously.
+  const placingRef = useRef(false);
+  // One Idempotency-Key per checkout *attempt*, not per request. Generating
+  // a fresh key inside each call is what let a double-click create two
+  // orders - the server deduplicates by key, and never saw the same one
+  // twice. The key is tied to the payload because reusing it for a changed
+  // order is a 409 by design.
+  const attempt = useRef({ key: null, signature: null });
 
   const items = useMemo(
     () =>
@@ -139,6 +149,8 @@ export default function Checkout() {
       toast.error('لطفاً آدرس تحویل را انتخاب کنید');
       return;
     }
+    if (placingRef.current) return;
+    placingRef.current = true;
     setPlacing(true);
     try {
       const payload = {
@@ -153,12 +165,18 @@ export default function Checkout() {
             : { payWithZarinpal: true }),
       };
 
+      const signature = JSON.stringify(payload);
+      if (attempt.current.signature !== signature) {
+        attempt.current = { key: idempotencyKey(), signature };
+      }
+
       const result = await api.post('/orders', payload, {
         auth: true,
         // A retried request returns the order it already created rather
         // than making a second one.
-        headers: { 'Idempotency-Key': idempotencyKey() },
+        headers: { 'Idempotency-Key': attempt.current.key },
       });
+      attempt.current = { key: null, signature: null };
 
       if (result?.paymentUrl) {
         clearLocal();
@@ -174,6 +192,7 @@ export default function Checkout() {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      placingRef.current = false;
       setPlacing(false);
     }
   };

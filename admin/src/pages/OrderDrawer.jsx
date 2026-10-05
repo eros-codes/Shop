@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
@@ -10,24 +10,37 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
   const toast = useToast();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
+  // "This order was not found" is a different thing to say than "we could
+  // not reach the server", and the admin needs to know which one it is.
+  const [failed, setFailed] = useState(false);
   const [target, setTarget] = useState('');
   const [tracking, setTracking] = useState('');
   const [saving, setSaving] = useState(false);
+  // `saving` is React state, so it only disables the button on the next
+  // render - three fast clicks all get through first. Some transitions have
+  // side effects (an SMS on "sent", a refund on "cancelled"), so a repeat is
+  // not harmless even when the final status comes out right.
+  const savingRef = useRef(false);
 
   useEffect(() => {
     setLoading(true);
+    setFailed(false);
     api
       .get(`/orders/${orderId}`, { auth: true })
       .then((data) => {
         setOrder(data);
         setTracking(data?.tracking_code ?? '');
       })
-      .catch(() => setOrder(null))
+      .catch((error) => {
+        setOrder(null);
+        setFailed(!error?.status || error.status >= 500);
+      })
       .finally(() => setLoading(false));
   }, [orderId]);
 
   const changeStatus = async () => {
-    if (!target) return;
+    if (!target || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       const updated = await api.patch(
@@ -49,6 +62,7 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -81,7 +95,11 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
       {loading ? (
         <div className="skeleton" style={{ height: 240 }} />
       ) : !order ? (
-        <p className="small muted">این سفارش پیدا نشد.</p>
+        <p className="small muted">
+          {failed
+            ? 'ارتباط با سرور برقرار نشد؛ لطفاً دوباره تلاش کنید.'
+            : 'این سفارش پیدا نشد.'}
+        </p>
       ) : (
         <div className="stack" style={{ gap: 16 }}>
           <div className="grid cols-3">

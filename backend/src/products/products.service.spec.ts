@@ -380,6 +380,64 @@ describe('ProductsService', () => {
     });
   });
 
+  describe('variant combinations', () => {
+    // Option-less variants used to be skipped entirely, which let a product
+    // pick up two identical "Default" rows. They are now told apart by
+    // title, so variants named differently stay legal while a second row
+    // with the same name - or two unnamed ones - is refused.
+    const callNew = (seen: Set<string>, values: unknown[], label?: string) =>
+      (
+        service as unknown as {
+          assertCombinationIsNew: (
+            s: Set<string>,
+            v: unknown[],
+            l?: string,
+          ) => void;
+        }
+      ).assertCombinationIsNew(seen, values, label);
+
+    const option = (attributeId: number, optionId: number) => ({
+      attribute: { id: attributeId },
+      option: { id: optionId },
+    });
+
+    it('allows option-less variants that are named differently', () => {
+      const seen = new Set<string>();
+      callNew(seen, [], 'مشکی');
+      expect(() => callNew(seen, [], 'سفید')).not.toThrow();
+    });
+
+    it('refuses two option-less variants with the same name', () => {
+      const seen = new Set<string>();
+      callNew(seen, [], 'Default');
+      expect(() => callNew(seen, [], ' default ')).toThrow();
+    });
+
+    it('treats two unnamed option-less variants as the same one', () => {
+      const seen = new Set<string>();
+      callNew(seen, [], undefined);
+      expect(() => callNew(seen, [], '')).toThrow();
+    });
+
+    it('rejects a repeated option combination', () => {
+      const seen = new Set<string>();
+      callNew(seen, [option(1, 2)], 'مشکی');
+      expect(() => callNew(seen, [option(1, 2)], 'مشکی دوباره')).toThrow();
+    });
+
+    it('allows genuinely different combinations, whatever their order', () => {
+      const seen = new Set<string>();
+      callNew(seen, [option(1, 2), option(3, 9)], 'مشکی / ۲۵۶');
+      expect(() =>
+        callNew(seen, [option(1, 5), option(3, 9)], 'سفید / ۲۵۶'),
+      ).not.toThrow();
+      // same pair, listed the other way round, is still the same variant
+      expect(() =>
+        callNew(seen, [option(3, 9), option(1, 2)], 'تکراری'),
+      ).toThrow();
+    });
+  });
+
   describe('toggleBookmark', () => {
     it('creates a bookmark when none exists', async () => {
       manager.findOne.mockResolvedValue({ id: 1 });

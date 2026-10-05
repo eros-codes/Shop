@@ -2,7 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, BarChart3, TrendingUp } from 'lucide-react';
 import { api, buildQuery } from '../lib/api';
 import { formatToman } from '../lib/format';
-import { Button, EmptyState, Field } from '../components/Primitives';
+import {
+  Button,
+  ConnectionError,
+  EmptyState,
+  Field,
+} from '../components/Primitives';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const daysAgo = (days) =>
@@ -16,6 +21,9 @@ export default function Reports() {
   const [lowStock, setLowStock] = useState([]);
   const [threshold, setThreshold] = useState(5);
   const [loading, setLoading] = useState(true);
+  // Promise.allSettled swallowed rejections entirely, so an unreachable API
+  // drew an empty report that looked like a quiet trading period.
+  const [failed, setFailed] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -31,6 +39,7 @@ export default function Reports() {
       .then(([salesResult, topResult]) => {
         if (salesResult.status === 'fulfilled') setSales(salesResult.value);
         if (topResult.status === 'fulfilled') setTop(topResult.value?.items ?? []);
+        setFailed(salesResult.status === 'rejected');
       })
       .finally(() => setLoading(false));
   }, [range, granularity]);
@@ -130,6 +139,8 @@ export default function Reports() {
         <div className="card-pad">
           {loading ? (
             <div className="skeleton" style={{ height: 180 }} />
+          ) : failed ? (
+            <ConnectionError onRetry={load} />
           ) : periods.length === 0 ? (
             <EmptyState title="در این بازه فروشی ثبت نشده" />
           ) : (

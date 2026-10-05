@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UsersModule } from '../users/users.module';
 import { JwtStrategy } from './strategies/jwt.stragety';
+import { User } from '../users/entities/user.entity';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -16,7 +17,7 @@ import { SmsModule } from '../sms/sms.module';
     UsersModule,
     PassportModule,
     SmsModule,
-    TypeOrmModule.forFeature([RefreshToken, OtpVerification]),
+    TypeOrmModule.forFeature([RefreshToken, OtpVerification, User]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

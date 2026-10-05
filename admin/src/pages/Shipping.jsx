@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { MapPin, Pencil, Plus, Trash2, Truck } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
@@ -23,6 +23,11 @@ export default function Shipping() {
   const [rateForm, setRateForm] = useState(null);
   const [removing, setRemoving] = useState(null);
   const [saving, setSaving] = useState(false);
+  // setSaving only disables the button on the next render, so clicks landing
+  // in the same React tick all get through. This ref closes that window - it
+  // matters because a repeated submit fires side effects again and can leave
+  // duplicate rows wherever the database has no unique constraint.
+  const busyRef = useRef(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -47,6 +52,8 @@ export default function Shipping() {
       supports_cash_on_delivery: form.get('cod') === 'on',
       is_active: form.get('is_active') === 'on',
     };
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       if (methodForm.id) {
@@ -60,6 +67,7 @@ export default function Shipping() {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };
@@ -75,6 +83,8 @@ export default function Shipping() {
         .filter(Boolean),
       is_default: form.get('is_default') === 'on',
     };
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       if (zoneForm.id) {
@@ -88,6 +98,7 @@ export default function Shipping() {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };
@@ -104,6 +115,8 @@ export default function Shipping() {
         : {}),
       cash_on_delivery_fee: Number(form.get('cash_on_delivery_fee') || 0),
     };
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       await api.post(`/shipping/methods/${rateForm.method.id}/rates`, payload, {
@@ -115,6 +128,7 @@ export default function Shipping() {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };

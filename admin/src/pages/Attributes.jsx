@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { Pencil, Plus, Sliders, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
@@ -28,6 +28,11 @@ export default function Attributes() {
   const [optionsFor, setOptionsFor] = useState(null);
   const [removing, setRemoving] = useState(null);
   const [saving, setSaving] = useState(false);
+  // setSaving only disables the button on the next render, so clicks landing
+  // in the same React tick all get through. This ref closes that window - it
+  // matters because a repeated submit fires side effects again and can leave
+  // duplicate rows wherever the database has no unique constraint.
+  const busyRef = useRef(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -51,6 +56,8 @@ export default function Attributes() {
       is_variant_axis: form.get('is_variant_axis') === 'on',
       is_filterable: form.get('is_filterable') === 'on',
     };
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       if (editing.id) {
@@ -64,6 +71,7 @@ export default function Attributes() {
     } catch (error) {
       toast.error(translateError(error));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   };

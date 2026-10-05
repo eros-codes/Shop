@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Inbox, Search, X } from 'lucide-react';
+import { Inbox, Search, WifiOff, X } from 'lucide-react';
 
 export function Button({
   variant = 'primary',
@@ -29,12 +29,13 @@ export function Button({
   );
 }
 
-export function Field({ label, hint, children }) {
+export function Field({ label, hint, error, children }) {
   return (
-    <label className="field">
+    <label className={error ? 'field has-error' : 'field'}>
       {label ? <span className="field-label">{label}</span> : null}
       {children}
-      {hint ? <span className="field-hint">{hint}</span> : null}
+      {error ? <span className="field-error">{error}</span> : null}
+      {!error && hint ? <span className="field-hint">{hint}</span> : null}
     </label>
   );
 }
@@ -73,6 +74,25 @@ export function SearchBox({ value, onChange, placeholder = 'جستجو…' }) {
         placeholder={placeholder}
       />
     </div>
+  );
+}
+
+// A request that failed is not an empty table. Every list screen used to
+// collapse the two in a `.catch(() => setItems([]))`, so an admin whose API
+// was unreachable saw a shop with no orders, no products and no users - and
+// nothing on screen to say the panel simply could not reach the server.
+export function ConnectionError({ onRetry }) {
+  return (
+    <EmptyState
+      icon={<WifiOff size={26} />}
+      title="ارتباط با سرور برقرار نشد"
+      description="اتصال خود را بررسی کنید و دوباره تلاش کنید. اگر مشکل ادامه داشت، سرویس ممکن است در دسترس نباشد."
+      action={
+        <Button variant="primary" onClick={onRetry ?? (() => window.location.reload())}>
+          تلاش دوباره
+        </Button>
+      }
+    />
   );
 }
 

@@ -1,9 +1,9 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { JwtService } from '@nestjs/jwt';
 import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import cookieParser from 'cookie-parser';
-import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { createValidationPipe } from '../src/common/validation/persian-validation';
 import { User } from '../src/users/entities/user.entity';
@@ -74,14 +74,18 @@ export async function createAccount(
     addressId = address.id;
   }
 
-  const login = await request(app.getHttpServer())
-    .post('/auth/login')
-    .send({ mobile, password: PASSWORD });
-  if (!login.body?.data?.accessToken) {
-    throw new Error(`Could not log the test account in: ${login.text}`);
-  }
+  // Signed here with the app's own JwtService and the same claims the login
+  // endpoint issues, rather than by calling /auth/login. Every spec shares
+  // one IP, and sign-in is rate-limited to five requests a minute, so setup
+  // that went through the real endpoint made any spec with more than five
+  // accounts fail with 429 for reasons unrelated to what it tests. Signing
+  // in itself is covered properly in auth.e2e-spec.ts.
+  const token = app.get(JwtService, { strict: false }).sign({
+    sub: user.id,
+    role: user.role,
+  });
 
-  return { id: user.id, mobile, token: login.body.data.accessToken, addressId };
+  return { id: user.id, mobile, token, addressId };
 }
 
 // A unique idempotency key per checkout, as a real client would send.

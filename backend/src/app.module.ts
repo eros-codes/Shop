@@ -99,15 +99,27 @@ import { AccountsBestSellersRelated1790800000000 } from './migrations/1790800000
           }),
           otherwise: Joi.string().allow('').default(''),
         }),
+        // A public portfolio demo runs as a real production build (secure
+        // cookies, migrations, no schema sync, no Swagger) but has no
+        // merchant account and must never take real money. DEMO_MODE is the
+        // one explicit switch for that: it allows the sandbox gateway and the
+        // demo seed, and nothing else. A real shop leaves it unset.
+        DEMO_MODE: Joi.boolean().default(false),
         ZARINPAL_MODE: Joi.when('NODE_ENV', {
           is: 'production',
-          then: Joi.string()
-            .valid('production')
-            .default('production')
-            .messages({
-              'any.only':
-                'ZARINPAL_MODE must be "production" when NODE_ENV=production - sandbox payments never collect real money',
-            }),
+          then: Joi.when('DEMO_MODE', {
+            is: Joi.valid(true, 'true'),
+            then: Joi.string()
+              .valid('sandbox', 'production')
+              .default('sandbox'),
+            otherwise: Joi.string()
+              .valid('production')
+              .default('production')
+              .messages({
+                'any.only':
+                  'ZARINPAL_MODE must be "production" when NODE_ENV=production - sandbox payments never collect real money (set DEMO_MODE=true only for a public demo)',
+              }),
+          }),
           otherwise: Joi.string()
             .valid('sandbox', 'production')
             .default('sandbox'),

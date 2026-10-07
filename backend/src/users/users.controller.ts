@@ -74,6 +74,17 @@ export class UsersController {
     if (!isOwner && !isAdmin) {
       throw new ForbiddenException('You can only update your own profile');
     }
+
+    // Setting a password here asks for no current password. Allowing that to
+    // the owner meant anyone holding a stolen access token for 15 minutes
+    // could choose a new password and take the account over for good. The
+    // owner changes theirs through PATCH /auth/password, which checks the
+    // current one; only an admin may set one here.
+    if (updateUserDto.password !== undefined && !isAdmin) {
+      throw new ForbiddenException(
+        'Change your own password through PATCH /auth/password - it asks for your current password',
+      );
+    }
     const updatedUser = await this.usersService.update(id, updateUserDto);
     return { data: updatedUser, message: 'User Updated Successfully' };
   }

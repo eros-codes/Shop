@@ -1,0 +1,25 @@
+[Unit]
+Description=tellcall API (NestJS)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tellcall
+Group=tellcall
+WorkingDirectory=/srv/tellcall/backend
+EnvironmentFile=/etc/tellcall/backend.env
+ExecStart=/usr/bin/node dist/main
+Restart=on-failure
+RestartSec=3
+# Logs go to the journal: journalctl -u tellcall-api -f
+
+# Hardening. The process only ever needs to write uploaded images.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/tellcall
+
+[Install]
+WantedBy=multi-user.target

@@ -256,6 +256,48 @@ describe('Regressions (e2e)', () => {
       expect(stolen.status).toBe(401);
     }, 30_000);
 
+    // The generic profile route accepted a new password with no current
+    // password. Anyone holding a stolen access token for its 15 minutes
+    // could pick a password, take the account over for good and lock the
+    // owner out - and since that path wrote the password itself, the stolen
+    // token even kept working afterwards.
+    it('does not let the owner set a password without the current one', async () => {
+      const victim = await createAccount(app, userRoleEnum.NormalUser);
+      const hashOf = async () =>
+        (
+          await dataSource.query('SELECT password FROM users WHERE id = ?', [
+            victim.id,
+          ])
+        )[0].password as string;
+      const before = await hashOf();
+
+      const hijack = await api()
+        .patch(`/users/${victim.id}`)
+        .set('Authorization', `Bearer ${victim.token}`)
+        .send({ password: 'Hijack123x' });
+      expect(hijack.status).toBe(403);
+
+      // Checked in the database rather than by trying to sign in with the
+      // attacker's password: a failed sign-in counts against the login rate
+      // limit, which every later test in this file shares.
+      expect(await hashOf()).toBe(before);
+    });
+
+    it('retires old tokens when an admin sets a password', async () => {
+      const customer = await createAccount(app, userRoleEnum.NormalUser);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+      const set = await asAdmin(api().patch(`/users/${customer.id}`)).send({
+        password: 'AdminSet9x',
+      });
+      expect(set.status).toBe(200);
+
+      const old = await api()
+        .get('/addresses')
+        .set('Authorization', `Bearer ${customer.token}`);
+      expect(old.status).toBe(401);
+    }, 30_000);
+
     it('takes the role from the database, not the token', async () => {
       const demoted = await createAccount(app, userRoleEnum.AdminUser);
       const before = await api()

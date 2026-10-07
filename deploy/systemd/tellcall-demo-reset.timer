@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly reset of the tellcall public demo
+
+[Timer]
+# 04:00 Tehran time, when nobody is browsing a portfolio demo.
+OnCalendar=*-*-* 04:00:00 Asia/Tehran
+# If the server was off at 04:00, reset at the next boot instead.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

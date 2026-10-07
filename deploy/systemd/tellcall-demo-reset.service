@@ -1,0 +1,7 @@
+[Unit]
+Description=Reset the tellcall public demo to its seed data
+After=mysql.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/tellcall/deploy/scripts/reset-demo.sh

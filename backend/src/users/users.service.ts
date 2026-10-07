@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -18,6 +19,9 @@ import { AuditActor, AuditService } from '../audit/audit.service';
 import { ProductVariant } from '../products/entities/product-variant.entity';
 import { lockActiveProduct } from '../products/utils/product-locks';
 import { lockUserRow } from './utils/lock-user-row';
+import { isDemoMode, isLockedDemoAccount } from '../common/demo/demo-accounts';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 export const MAX_BASKET_LINES = 100;
 
@@ -58,9 +62,28 @@ export class UsersService {
 
   // Used by the password flows. Sessions are revoked by the caller,
   // which is the part that actually locks an attacker out.
+  // On a public demo, refuse anything that would lock other visitors out of
+  // a shared demo account. A no-op on a real shop, where DEMO_MODE is unset.
+  private async assertNotLockedDemoAccount(id: number): Promise<void> {
+    if (!isDemoMode()) return;
+    const user = await this.userRepository.findOne({
+      select: { id: true, mobile: true },
+      where: { id },
+    });
+    if (user && isLockedDemoAccount(user.mobile)) {
+      throw new AppError(
+        ErrorCodes.DEMO_ACCOUNT_LOCKED,
+        'This is a shared demo account - its password, role and existence cannot be changed on the demo',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+  }
+
   async setPassword(id: number, hashedPassword: string): Promise<void> {
-    // Both the reset and the signed-in change come through here, so this is
-    // the one place that has to retire the tokens already issued.
+    // Every password write goes through here - the reset, the signed-in
+    // change and an admin setting one - so this is the one place that has
+    // to retire the tokens already issued.
+    await this.assertNotLockedDemoAccount(id);
     const result = await this.userRepository.update(
       { id },
       { password: hashedPassword, tokens_valid_after: new Date() },
@@ -132,16 +155,19 @@ export class UsersService {
 
   async update(id: number, updateUserDto: UpdateUserDto) {
     const { password, ...safeUpdate } = updateUserDto;
-    const updateData: Partial<User> = { ...safeUpdate };
-    if (password) {
-      updateData.password = await bcrypt.hash(password, 10);
-    }
-    const result = await this.userRepository.update({ id }, updateData);
-    if (result.affected === 0) {
-      throw new NotFoundException(`Could not find user ${id}`);
+
+    if (Object.keys(safeUpdate).length) {
+      const result = await this.userRepository.update({ id }, safeUpdate);
+      if (result.affected === 0) {
+        throw new NotFoundException(`Could not find user ${id}`);
+      }
     }
 
+    // This used to hash and write the password itself, which skipped
+    // setPassword - so tokens issued before the change stayed valid. It now
+    // goes through the same single path as every other password write.
     if (password) {
+      await this.setPassword(id, await bcrypt.hash(password, 10));
       await this.refreshTokenRepository.delete({ user: { id } });
     }
 
@@ -149,6 +175,7 @@ export class UsersService {
   }
 
   async updateRole(id: number, role: userRoleEnum, actor?: AuditActor) {
+    await this.assertNotLockedDemoAccount(id);
     const before = await this.userRepository.findOne({
       select: { id: true, role: true },
       where: { id },
@@ -172,6 +199,7 @@ export class UsersService {
   }
 
   async remove(id: number) {
+    await this.assertNotLockedDemoAccount(id);
     const user = await this.userRepository.findOneBy({ id });
     if (!user) {
       throw new NotFoundException(`Could not find user ${id}`);

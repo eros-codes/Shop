@@ -20,8 +20,27 @@ if [[ ${DEMO_MODE:-} != "true" ]]; then
   exit 1
 fi
 
+# Checked before anything is dropped: without the seed the reset would wipe
+# the shop and have nothing to put back.
+SEED="$APP_DIR/backend/src/seeds/seed-demo.ts"
+[[ -f $SEED ]] || { echo "Missing $SEED - nothing to reset to." >&2; exit 1; }
+
+# Whatever happens from here, the API comes back up. A reset that failed
+# half way used to leave the demo down until someone noticed; this way it
+# is at worst an emptier shop until tomorrow's run, and the failure is in
+# the journal (journalctl -u tellcall-demo-reset).
+api_stopped=false
+restart_api() {
+  if $api_stopped; then
+    echo "==> Starting the API"
+    systemctl start tellcall-api || true
+  fi
+}
+trap restart_api EXIT
+
 echo "==> Stopping the API"
 systemctl stop tellcall-api
+api_stopped=true
 
 # Root connects through the local socket (auth_socket on Ubuntu), so no
 # database password is needed here. The application user keeps its grants:
@@ -37,6 +56,4 @@ install -d -o "$APP_USER" -g "$APP_USER" "$UPLOAD_DIR"
 echo "==> Migrating and seeding"
 runuser -u "$APP_USER" -- bash -c "cd $APP_DIR/backend && set -a && . $ENV_FILE && set +a && npm run migration:run && npm run seed:demo"
 
-echo "==> Starting the API"
-systemctl start tellcall-api
 echo "==> Demo reset complete."

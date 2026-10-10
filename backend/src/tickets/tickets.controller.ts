@@ -64,9 +64,9 @@ export class TicketsController {
     @Param('id', ParseIdPipe) id: number,
     @CurrentUser() currentUser: CurrentUserPayload,
   ) {
-    const ticket = await this.ticketsService.findOne(id);
-    const isOwner = ticket.user.id === currentUser.userId;
     const isAdmin = currentUser.role === userRoleEnum.AdminUser;
+    const ticket = await this.ticketsService.findOne(id, isAdmin);
+    const isOwner = ticket.user.id === currentUser.userId;
     if (!isOwner && !isAdmin) {
       throw new ForbiddenException('You can only view your own tickets');
     }
@@ -79,13 +79,13 @@ export class TicketsController {
     @Query() query: PaginationQueryDto,
     @CurrentUser() currentUser: CurrentUserPayload,
   ) {
-    const ticket = await this.ticketsService.findOne(id);
-    const isOwner = ticket.user.id === currentUser.userId;
     const isAdmin = currentUser.role === userRoleEnum.AdminUser;
+    const ticket = await this.ticketsService.findOne(id, isAdmin);
+    const isOwner = ticket.user.id === currentUser.userId;
     if (!isOwner && !isAdmin) {
       throw new ForbiddenException('You can only view your own tickets');
     }
-    const replies = await this.ticketsService.findReplies(id, query);
+    const replies = await this.ticketsService.findReplies(id, query, isAdmin);
     return { data: replies, message: 'Replies Found' };
   }
 

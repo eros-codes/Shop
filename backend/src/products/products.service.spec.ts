@@ -1,7 +1,11 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, In, IsNull } from 'typeorm';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { DataSource, In, IsNull, QueryFailedError } from 'typeorm';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
@@ -16,6 +20,7 @@ import {
 import { CategoriesService } from '../categories/categories.service';
 import { AuditService } from '../audit/audit.service';
 import { AttributesService } from '../attributes/attributes.service';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 function makeQueryBuilder() {
   const qb: Record<string, jest.Mock> = {};
@@ -43,6 +48,8 @@ function makeQueryBuilder() {
   qb.execute = jest.fn().mockResolvedValue({ affected: 1 });
   qb.getOne = jest.fn().mockResolvedValue(null);
   qb.getManyAndCount = jest.fn().mockResolvedValue([[], 0]);
+  qb.getRawMany = jest.fn().mockResolvedValue([]);
+  qb.getCount = jest.fn().mockResolvedValue(0);
   qb.loadMany = jest.fn().mockResolvedValue([]);
   qb.addAndRemove = jest.fn().mockResolvedValue(undefined);
   return qb;
@@ -56,6 +63,8 @@ describe('ProductsService', () => {
   let qb: Record<string, jest.Mock>;
   let fileStorage: Record<string, jest.Mock>;
   let catalogCache: { invalidate: jest.Mock };
+  let attributesService: Record<string, jest.Mock>;
+  let dataSource: Record<string, jest.Mock>;
 
   const png = {
     buffer: Buffer.from('png'),
@@ -112,6 +121,10 @@ describe('ProductsService', () => {
       ),
     };
     catalogCache = { invalidate: jest.fn().mockResolvedValue(undefined) };
+    dataSource = {
+      transaction: jest.fn((cb: any) => cb(manager)),
+      getRepository: jest.fn(() => ({ find: jest.fn().mockResolvedValue([]) })),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -130,10 +143,7 @@ describe('ProductsService', () => {
         ProductsService,
         { provide: getRepositoryToken(Product), useValue: productsRepo },
         { provide: UsersService, useValue: {} },
-        {
-          provide: DataSource,
-          useValue: { transaction: jest.fn((cb: any) => cb(manager)) },
-        },
+        { provide: DataSource, useValue: dataSource },
         { provide: FileStorage, useValue: fileStorage },
         { provide: CatalogCacheService, useValue: catalogCache },
         {
@@ -146,6 +156,7 @@ describe('ProductsService', () => {
     }).compile();
 
     service = moduleRef.get(ProductsService);
+    attributesService = moduleRef.get(AttributesService);
   });
 
   describe('create', () => {
@@ -276,8 +287,15 @@ describe('ProductsService', () => {
 
       await service.remove(5);
 
-      expect(manager.softDelete).toHaveBeenCalledWith(Product, { id: 5 });
-      expect(qb.where).toHaveBeenCalledWith('productId = :id', { id: 5 });
+      expect(manager.softDelete).toHaveBeenCalledWith(Product, { id: In([5]) });
+      // Its variants go with it, so their SKUs are free for a new product.
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE `product_variants` SET `deleted_at`'),
+        [5],
+      );
+      expect(qb.where).toHaveBeenCalledWith('productId IN (:...ids)', {
+        ids: [5],
+      });
       expect(qb.execute).toHaveBeenCalled();
       expect(fileStorage.delete).not.toHaveBeenCalled();
       expect(catalogCache.invalidate).toHaveBeenCalledWith(
@@ -440,7 +458,7 @@ describe('ProductsService', () => {
 
   describe('toggleBookmark', () => {
     it('creates a bookmark when none exists', async () => {
-      manager.findOne.mockResolvedValue({ id: 1 });
+      manager.findOne.mockResolvedValue({ id: 1, is_published: true });
       qb.getOne.mockResolvedValue(null);
 
       const result = await service.toggleBookmark(7, { product_id: 1 });
@@ -475,5 +493,152 @@ describe('ProductsService', () => {
 
   it('keeps In/IsNull imports meaningful for the category helpers', () => {
     expect(In([1]).type).toBe('in');
+  });
+
+  describe('drafts', () => {
+    // A draft's id, price and description are the shop's unreleased work.
+    it('answers 404 for an unpublished product on the public lookups', async () => {
+      productsRepo.findOne.mockResolvedValue({ id: 5, is_published: false });
+
+      await expect(service.findOne(5)).rejects.toThrow(NotFoundException);
+      await expect(service.findBySlug('secret')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('shows it to the admin panel', async () => {
+      productsRepo.findOne.mockResolvedValue({ id: 5, is_published: false });
+
+      await expect(
+        service.findOne(5, { includeDrafts: true }),
+      ).resolves.toMatchObject({ id: 5 });
+    });
+
+    it('lists only published products unless drafts are asked for', async () => {
+      await service.findAll({ page: 1, limit: 10 });
+      expect(qb.where).toHaveBeenLastCalledWith('product.is_published = TRUE');
+
+      await service.findAll({ page: 1, limit: 10 }, { includeDrafts: true });
+      expect(qb.where).toHaveBeenLastCalledWith('1 = 1');
+    });
+
+    it('will not let a customer bookmark one', async () => {
+      manager.findOne.mockResolvedValue({ id: 1, is_published: false });
+      qb.getOne.mockResolvedValue(null);
+
+      await expect(
+        service.toggleBookmark(7, { product_id: 1 }),
+      ).rejects.toMatchObject({ code: ErrorCodes.VARIANT_NOT_FOR_SALE });
+      expect(manager.insert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('slugs', () => {
+    const product = {
+      title: 'Phone',
+      description: 'A phone',
+      price: 100,
+      stock: 1,
+    };
+
+    // Two products with the same title used to die on the unique index.
+    it('gives a second product with the same title the next free slug', async () => {
+      qb.getRawMany.mockResolvedValue([{ slug: 'phone' }]);
+
+      await service.create(product);
+
+      expect(manager.create).toHaveBeenCalledWith(
+        Product,
+        expect.objectContaining({ slug: 'phone-2' }),
+      );
+    });
+
+    it('turns a clash on a slug the admin typed into a 409', async () => {
+      manager.save.mockRejectedValueOnce(
+        Object.assign(new QueryFailedError('INSERT', [], new Error('dup')), {
+          driverError: {
+            code: 'ER_DUP_ENTRY',
+            errno: 1062,
+            sqlMessage:
+              "Duplicate entry 'phone' for key 'UQ_products_active_slug'",
+          },
+        }),
+      );
+
+      await expect(
+        service.create({ ...product, slug: 'phone' }),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('update - descriptive attributes and sale price', () => {
+    beforeEach(() => {
+      manager.findOne.mockResolvedValue({
+        id: 1,
+        price: 100,
+        sale_price: null,
+      });
+    });
+
+    // The panel sends them on every save; they were silently dropped.
+    it('saves the descriptive attributes it is given', async () => {
+      const attributes = [{ attributeId: 3, value_text: 'AMOLED' }];
+
+      await service.update(1, { attributes });
+
+      expect(attributesService.replaceProductValues).toHaveBeenCalledWith(
+        manager,
+        1,
+        attributes,
+      );
+    });
+
+    it('refuses a sale price above the price the edit leaves', async () => {
+      await expect(service.update(1, { sale_price: 150 })).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(
+        service.update(1, { price: 80, sale_price: 90 }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('lets a sale be ended by clearing it', async () => {
+      await service.update(1, { sale_price: null } as never);
+
+      expect(manager.update).toHaveBeenCalledWith(
+        Product,
+        expect.anything(),
+        expect.objectContaining({ sale_price: null }),
+      );
+    });
+  });
+
+  describe('facets', () => {
+    // Each option used to run the whole listing (rows, categories, option
+    // lookups) just to read its total.
+    it('counts each option with a COUNT and never loads rows', async () => {
+      dataSource.getRepository.mockReturnValue({
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 1,
+            title: 'Colour',
+            code: 'colour',
+            type: 'select',
+            is_variant_axis: true,
+            options: [
+              { id: 10, value: 'Black', slug: 'black', sort_order: 0 },
+              { id: 11, value: 'White', slug: 'white', sort_order: 1 },
+            ],
+          },
+        ]),
+      });
+      qb.getCount.mockResolvedValue(3);
+
+      const facets = await service.facets({ page: 1, limit: 24 });
+
+      expect(qb.getCount).toHaveBeenCalledTimes(2);
+      expect(qb.getManyAndCount).not.toHaveBeenCalled();
+      expect(facets[0].options.map((option) => option.count)).toEqual([3, 3]);
+    });
   });
 });

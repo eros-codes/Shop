@@ -9,6 +9,10 @@ import { FilterOrderDto } from '../../orders/dto/filter-order.dto';
 import { UpdateCommentDto } from '../../comments/dto/update-comment.dto';
 import { CreateCommentDto } from '../../comments/dto/create-comment.dto';
 import { CreateCategoryDto } from '../../categories/dto/create-category.dto';
+import { LoginDto } from '../../auth/dto/login.dto';
+import { VerifyOtpDto } from '../../auth/dto/verify-otp.dto';
+import { ResetPasswordDto } from '../../auth/dto/password.dto';
+import { CreateAddressDto } from '../../address/dto/create-address.dto';
 
 async function errorsFor<T extends object>(cls: new () => T, plain: object) {
   const instance = plainToInstance(cls, plain);
@@ -135,5 +139,79 @@ describe('DTO validation', () => {
         parentId: 3,
       }),
     ).toEqual([]);
+  });
+
+  // A phone's Persian keyboard types ۰-۹. Those used to fail every
+  // mobile-number pattern, so the customer could not sign in at all.
+  describe('Persian and Arabic digits', () => {
+    it('accepts a mobile number typed with Persian digits and stores it as ASCII', async () => {
+      const dto = plainToInstance(LoginDto, {
+        mobile: '۰۹۱۲ ۳۴۵ ۶۷۸۹',
+        password: 'Secret123',
+      });
+      expect(dto.mobile).toBe('09123456789');
+      expect(
+        await errorsFor(LoginDto, {
+          mobile: '۰۹۱۲۳۴۵۶۷۸۹',
+          password: 'Secret123',
+        }),
+      ).toEqual([]);
+    });
+
+    it('accepts an OTP typed with Arabic-Indic digits', async () => {
+      const dto = plainToInstance(VerifyOtpDto, {
+        mobile: '09123456789',
+        code: '١٢٣٤٥٦',
+      });
+      expect(dto.code).toBe('123456');
+      expect(
+        await errorsFor(VerifyOtpDto, {
+          mobile: '09123456789',
+          code: '١٢٣٤٥٦',
+        }),
+      ).toEqual([]);
+    });
+
+    it('still rejects a code that is not six digits', async () => {
+      expect(
+        await errorsFor(ResetPasswordDto, {
+          mobile: '09123456789',
+          code: '12a456',
+          password: 'NewPassword1',
+        }),
+      ).toContain('code');
+    });
+
+    it('checks the shape of postal codes and receiver numbers, whatever the digits', async () => {
+      const address = {
+        province: 'تهران',
+        city: 'تهران',
+        address: 'خیابان آزادی',
+        postal_code: '۱۲۳۴۵۶۷۸۹۰',
+        receiver_mobile: '۰۹۱۲۳۴۵۶۷۸۹',
+      };
+      expect(await errorsFor(CreateAddressDto, address)).toEqual([]);
+      expect(
+        await errorsFor(CreateAddressDto, {
+          ...address,
+          postal_code: 'abcdefghij',
+        }),
+      ).toContain('postal_code');
+      expect(
+        await errorsFor(CreateAddressDto, {
+          ...address,
+          receiver_mobile: 'abcdefghijk',
+        }),
+      ).toContain('receiver_mobile');
+    });
+
+    it('lets a 72-character password - the most reset allows - through sign-in', async () => {
+      expect(
+        await errorsFor(LoginDto, {
+          mobile: '09123456789',
+          password: 'A1'.repeat(36),
+        }),
+      ).toEqual([]);
+    });
   });
 });

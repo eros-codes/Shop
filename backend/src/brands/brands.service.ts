@@ -36,7 +36,7 @@ export class BrandsService {
     try {
       const brand = this.brandsRepository.create({ ...createBrandDto, slug });
       const saved = await this.brandsRepository.save(brand);
-      await this.catalogCache.invalidate(CatalogCacheScope.Products);
+      await this.invalidateCaches();
       return saved;
     } catch (error) {
       if (isDuplicateEntryError(error)) {
@@ -87,7 +87,7 @@ export class BrandsService {
     Object.assign(brand, updateBrandDto, { slug: nextSlug });
     try {
       const saved = await this.brandsRepository.save(brand);
-      await this.catalogCache.invalidate(CatalogCacheScope.Products);
+      await this.invalidateCaches();
       return saved;
     } catch (error) {
       if (isDuplicateEntryError(error)) {
@@ -99,11 +99,22 @@ export class BrandsService {
     }
   }
 
+  // The brand endpoints are cached under the Categories scope (with the
+  // rest of the navigation) and products embed their brand, so a change
+  // has to drop both. Only Products was dropped, and a new brand stayed
+  // missing from the panel's own brand picker for up to a minute.
+  private invalidateCaches(): Promise<void> {
+    return this.catalogCache.invalidate(
+      CatalogCacheScope.Categories,
+      CatalogCacheScope.Products,
+    );
+  }
+
   async remove(id: number): Promise<void> {
     const result = await this.brandsRepository.softDelete({ id });
     if (!result.affected) {
       throw new NotFoundException(`Brand with id ${id} not found`);
     }
-    await this.catalogCache.invalidate(CatalogCacheScope.Products);
+    await this.invalidateCaches();
   }
 }

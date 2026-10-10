@@ -13,6 +13,7 @@ import {
   UseInterceptors,
   UploadedFiles,
   ForbiddenException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -27,6 +28,8 @@ import { CreateBookmarkDto } from './dto/create-bookmark.dto';
 import { MergeBasketDto } from './dto/merge-basket.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
+import { ProductViewQueryDto } from './dto/product-view-query.dto';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import userRoleEnum from '../users/enums/userRoleEnum';
@@ -45,6 +48,26 @@ import {
 } from './pipes/product-images.pipe';
 import { ApiTags } from '@nestjs/swagger';
 
+// Unpublished products are the admin's work in progress. They are served
+// only on an explicit ?includeDrafts=true from a signed-in admin; anyone
+// else asking is told so (401 lets the panel refresh an expired token
+// rather than quietly getting a list with the drafts missing).
+function draftsAllowed(
+  flag: string | undefined,
+  user: CurrentUserPayload | null,
+): boolean {
+  if (flag !== 'true') return false;
+  if (!user) {
+    throw new UnauthorizedException(
+      'Sign in as an admin to see unpublished products',
+    );
+  }
+  if (user.role !== userRoleEnum.AdminUser) {
+    throw new ForbiddenException('Only an admin can see unpublished products');
+  }
+  return true;
+}
+
 @ApiTags('Products')
 @Controller('products')
 export class ProductsController {
@@ -58,15 +81,23 @@ export class ProductsController {
     return { data: newProduct, message: 'Product Created Successfully' };
   }
 
+  @UseGuards(OptionalJwtAuthGuard)
   @CatalogCache(CatalogCacheScope.Products)
   @Get()
-  async findAll(@Query() query: FilterProductDto) {
-    const products = await this.productsService.findAll(query);
+  async findAll(
+    @Query() query: FilterProductDto,
+    @CurrentUser() currentUser: CurrentUserPayload | null,
+  ) {
+    const products = await this.productsService.findAll(query, {
+      includeDrafts: draftsAllowed(query.includeDrafts, currentUser),
+    });
     return { data: products, message: 'Products Found' };
   }
 
   // The filter panel: every filterable value with the number of
-  // products that would remain if the shopper picked it too.
+  // products that would remain if the shopper picked it too. Cached like
+  // the listing it sits beside - it is the heaviest read in the shop.
+  @CatalogCache(CatalogCacheScope.Products)
   @Get('facets')
   async facets(@Query() query: FilterProductDto) {
     const facets = await this.productsService.facets(query);
@@ -111,10 +142,17 @@ export class ProductsController {
     return { data: product, message: 'Variant Removed Successfully' };
   }
 
+  @UseGuards(OptionalJwtAuthGuard)
   @CatalogCache(CatalogCacheScope.Products)
   @Get('slug/:slug')
-  async findBySlug(@Param('slug') slug: string) {
-    const product = await this.productsService.findBySlug(slug);
+  async findBySlug(
+    @Param('slug') slug: string,
+    @Query() query: ProductViewQueryDto,
+    @CurrentUser() currentUser: CurrentUserPayload | null,
+  ) {
+    const product = await this.productsService.findBySlug(slug, {
+      includeDrafts: draftsAllowed(query.includeDrafts, currentUser),
+    });
     return { data: product, message: 'Product Found' };
   }
 
@@ -143,10 +181,17 @@ export class ProductsController {
     return { data: products, message: 'Related Products Found' };
   }
 
+  @UseGuards(OptionalJwtAuthGuard)
   @CatalogCache(CatalogCacheScope.Products)
   @Get(':id')
-  async findOne(@Param('id', ParseIdPipe) id: number) {
-    const product = await this.productsService.findOne(id);
+  async findOne(
+    @Param('id', ParseIdPipe) id: number,
+    @Query() query: ProductViewQueryDto,
+    @CurrentUser() currentUser: CurrentUserPayload | null,
+  ) {
+    const product = await this.productsService.findOne(id, {
+      includeDrafts: draftsAllowed(query.includeDrafts, currentUser),
+    });
     return { data: product, message: 'Product Found' };
   }
 

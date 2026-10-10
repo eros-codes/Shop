@@ -75,7 +75,7 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
     if (!isEdit) return;
     setLoading(true);
     api
-      .get(`/products/${productId}`)
+      .get(`/products/${productId}?includeDrafts=true`, { auth: true })
       .then((product) => {
         setForm({
           title: product.title ?? '',
@@ -226,11 +226,22 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
         title: form.title.trim(),
         description: form.description.trim(),
         price: Number(form.price) || 0,
-        ...(form.sale_price !== '' ? { sale_price: Number(form.sale_price) } : {}),
+        // When editing, an emptied field is sent as null so it is actually
+        // cleared - leaving it out kept the old sale running and the old
+        // brand attached, whatever the form showed.
+        ...(form.sale_price !== ''
+          ? { sale_price: Number(form.sale_price) }
+          : isEdit
+            ? { sale_price: null }
+            : {}),
         ...(form.weight_grams !== ''
           ? { weight_grams: Number(form.weight_grams) }
           : {}),
-        ...(form.brandId ? { brandId: Number(form.brandId) } : {}),
+        ...(form.brandId
+          ? { brandId: Number(form.brandId) }
+          : isEdit
+            ? { brandId: null }
+            : {}),
         ...(form.categoryIds.length ? { categoryIds: form.categoryIds } : {}),
         is_published: form.is_published,
         attributes: descriptivePayload(),

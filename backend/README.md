@@ -105,6 +105,10 @@ Worth setting deliberately:
 - `THROTTLE_STORAGE=database` whenever more than one instance runs -
   in-memory counters are per process, so N instances allow N times the
   limit.
+- `THROTTLE_LIMIT_PER_MINUTE` - site-wide requests per minute from one
+  IP (default 600). Kept loose because mobile carriers put many customers
+  behind one address; sign-in, sign-up and the code flows are limited per
+  mobile number instead.
 - `SWAGGER_ENABLED` - docs are off in production by default; if you
   publish them, set `SWAGGER_USER`/`SWAGGER_PASSWORD` too.
 - Probes: `/health/live` for liveness (process only) and

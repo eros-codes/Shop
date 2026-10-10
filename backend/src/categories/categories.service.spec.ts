@@ -48,6 +48,7 @@ describe('CategoriesService', () => {
     qb.getRawMany = jest.fn();
     qb.execute = jest.fn();
     manager = {
+      query: jest.fn().mockResolvedValue(undefined),
       findOne: jest.fn(),
       find: jest.fn(),
       softDelete: jest.fn(),
@@ -225,8 +226,8 @@ describe('CategoriesService', () => {
       );
       expect(manager.softDelete).toHaveBeenCalledWith(Product, { id: In([1]) });
       expect(manager.softDelete).toHaveBeenCalledWith(Category, { id: 4 });
-      expect(qb.where).toHaveBeenCalledWith('productId IN (:...exclusiveIds)', {
-        exclusiveIds: [1],
+      expect(qb.where).toHaveBeenCalledWith('productId IN (:...ids)', {
+        ids: [1],
       });
       expect(result).toEqual({ deletedProducts: 1 });
     });

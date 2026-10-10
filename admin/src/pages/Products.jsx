@@ -28,7 +28,15 @@ export default function Products() {
     setLoading(true);
     api
       .get(
-        `/products${buildQuery({ page, limit: 20, search: search.trim() || undefined })}`,
+        // Drafts too: the public listing hides them, the panel is where
+        // they are worked on.
+        `/products${buildQuery({
+          page,
+          limit: 20,
+          search: search.trim() || undefined,
+          includeDrafts: 'true',
+        })}`,
+        { auth: true },
       )
       .then((data) =>
         setResult({

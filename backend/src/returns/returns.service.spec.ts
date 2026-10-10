@@ -13,6 +13,7 @@ import { CatalogCacheService } from '../common/cache/catalog-cache.service';
 import ReturnStatusEnum from './enums/return-status.enum';
 import ReturnReasonEnum from './enums/return-reason.enum';
 import OrderStatusEnum from '../orders/enums/order-status.enum';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 describe('ReturnsService', () => {
   let service: ReturnsService;
@@ -73,6 +74,7 @@ describe('ReturnsService', () => {
       createQueryBuilder: jest.fn(() => qb),
     };
     orders = { findOne: jest.fn(), update: jest.fn() };
+    requests.update.mockResolvedValue({ affected: 1 });
     wallets = { refund: jest.fn() };
     variantRepo = {
       increment: jest.fn(),
@@ -80,9 +82,16 @@ describe('ReturnsService', () => {
     };
     manager = {
       getRepository: jest.fn((entity: { name?: string }) =>
-        entity?.name === 'ProductVariant' ? variantRepo : requests,
+        entity?.name === 'ProductVariant'
+          ? variantRepo
+          : entity?.name === 'Order'
+            ? orders
+            : entity?.name === 'ReturnItem'
+              ? returnItems
+              : requests,
       ),
       query: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -134,9 +143,9 @@ describe('ReturnsService', () => {
         deliveredOrder({ status: OrderStatusEnum.Sent }),
       );
 
-      await expect(service.create(7, dto as never)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.create(7, dto as never)).rejects.toMatchObject({
+        code: ErrorCodes.RETURN_NOT_ALLOWED,
+      });
     });
 
     it('refuses one after the window has closed', async () => {
@@ -146,8 +155,58 @@ describe('ReturnsService', () => {
         }),
       );
 
-      await expect(service.create(7, dto as never)).rejects.toThrow(
-        BadRequestException,
+      await expect(service.create(7, dto as never)).rejects.toMatchObject({
+        code: ErrorCodes.RETURN_WINDOW_CLOSED,
+      });
+    });
+
+    // The same line listed twice used to be checked against what was left
+    // once per copy: 2 + 2 of an item bought twice went through.
+    it('adds up repeated lines before checking them against what was bought', async () => {
+      orders.findOne.mockResolvedValue(deliveredOrder());
+
+      await expect(
+        service.create(7, {
+          ...dto,
+          items: [
+            { orderItemId: 11, quantity: 2 },
+            { orderItemId: 11, quantity: 2 },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.RETURN_QUANTITY_EXCEEDED,
+        details: { remaining: 2 },
+      });
+      expect(requests.save).not.toHaveBeenCalled();
+    });
+
+    it('stores repeated lines as one', async () => {
+      orders.findOne.mockResolvedValue(deliveredOrder());
+      requests.findOne.mockResolvedValue({ id: 3, user: { id: 7 } });
+
+      await service.create(7, {
+        ...dto,
+        items: [
+          { orderItemId: 11, quantity: 1 },
+          { orderItemId: 11, quantity: 1 },
+        ],
+      });
+
+      expect(requests.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          items: [expect.objectContaining({ quantity: 2 })],
+        }),
+      );
+    });
+
+    it('judges requests for one order one at a time (order row locked)', async () => {
+      orders.findOne.mockResolvedValue(deliveredOrder());
+      requests.findOne.mockResolvedValue({ id: 3, user: { id: 7 } });
+
+      await service.create(7, dto);
+
+      expect(orders.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
       );
     });
 
@@ -166,9 +225,9 @@ describe('ReturnsService', () => {
       orders.findOne.mockResolvedValue(deliveredOrder());
       qb.getRawMany.mockResolvedValue([{ orderItemId: 11, quantity: '2' }]);
 
-      await expect(service.create(7, dto as never)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.create(7, dto as never)).rejects.toMatchObject({
+        code: ErrorCodes.RETURN_QUANTITY_EXCEEDED,
+      });
     });
   });
 
@@ -189,6 +248,7 @@ describe('ReturnsService', () => {
 
     it('refunds the goods and their share of the tax, never the shipping', async () => {
       requests.findOne.mockResolvedValue(pending());
+      orders.findOne.mockResolvedValue(deliveredOrder());
 
       await service.updateStatus(3, {
         status: ReturnStatusEnum.Refunded,
@@ -203,13 +263,15 @@ describe('ReturnsService', () => {
     });
 
     it('refuses to give back more than the customer paid', async () => {
-      requests.findOne.mockResolvedValue(
-        pending({ order: deliveredOrder({ refunded_amount: 250_000 }) }),
+      requests.findOne.mockResolvedValue(pending());
+      // Read fresh under the lock: another return already refunded it all.
+      orders.findOne.mockResolvedValue(
+        deliveredOrder({ refunded_amount: 250_000 }),
       );
 
       await expect(
         service.updateStatus(3, { status: ReturnStatusEnum.Refunded }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.REFUND_EXCEEDS_PAID });
       expect(wallets.refund).not.toHaveBeenCalled();
     });
 
@@ -233,7 +295,7 @@ describe('ReturnsService', () => {
       await service.cancel(3, 7);
 
       expect(requests.update).toHaveBeenCalledWith(
-        { id: 3 },
+        { id: 3, status: ReturnStatusEnum.Requested },
         { status: ReturnStatusEnum.Cancelled },
       );
     });

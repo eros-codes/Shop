@@ -775,6 +775,18 @@ table.data tbody tr:last-child td {
   font-size: 10.5px;
   color: var(--ink-400);
   white-space: nowrap;
+  text-align: center;
+  line-height: 1.35;
+  /* Room for the month line on every column, so the bars share a baseline
+     whether or not their column has one. */
+  min-height: 27px;
+}
+
+/* The month name under the first day of each month. */
+.chart-label small {
+  display: block;
+  font-size: 9.5px;
+  color: var(--ink-500);
 }
 
 /* ---------- misc ---------- */

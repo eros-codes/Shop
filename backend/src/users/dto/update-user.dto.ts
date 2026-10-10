@@ -6,6 +6,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { PASSWORD_MAX_LENGTH } from '../../common/constants/limits';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -19,7 +20,9 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString({ message: 'Password should be a string' })
   @MinLength(8, { message: 'Password must be at least 8 characters' })
-  @MaxLength(64, { message: 'Password must be shorter than 64 characters' })
+  @MaxLength(PASSWORD_MAX_LENGTH, {
+    message: `Password must be at most ${PASSWORD_MAX_LENGTH} characters`,
+  })
   @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
     message: 'Password must contain at least one letter and one number',
   })

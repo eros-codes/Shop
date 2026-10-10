@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { CACHE_MANAGER, CacheInterceptor } from '@nestjs/cache-manager';
 import { Reflector } from '@nestjs/core';
+import userRoleEnum from '../../users/enums/userRoleEnum';
 import {
   CatalogCacheScope,
   CatalogCacheService,
@@ -37,6 +38,19 @@ export class CatalogCacheInterceptor extends CacheInterceptor {
     );
     const urlKey = await super.trackBy(context);
     if (!scope || !urlKey) {
+      return undefined;
+    }
+    // A cached response is served without the handler running - and with
+    // it, the check that only an admin may see drafts. Anything an admin
+    // asked for stays out of the shared cache.
+    const request = context.switchToHttp().getRequest<{
+      query?: Record<string, unknown>;
+      user?: { role?: string } | null;
+    }>();
+    if (
+      request.query?.includeDrafts === 'true' ||
+      request.user?.role === userRoleEnum.AdminUser
+    ) {
       return undefined;
     }
     try {

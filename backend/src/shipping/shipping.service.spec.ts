@@ -89,6 +89,48 @@ describe('ShippingService', () => {
     it('answers null when the shop has no zones at all', async () => {
       expect(await service.resolveZone('تهران')).toBeNull();
     });
+
+    // Typed on an Arabic keyboard (ي, ك), with a half-space instead of a
+    // space: the same province, which used to fall to the default zone.
+    it('matches a province however it was typed', async () => {
+      zones.find.mockResolvedValue([
+        {
+          id: 1,
+          title: 'شمال‌غرب',
+          provinces: ['آذربایجان شرقی', 'کرمانشاه'],
+          is_default: false,
+        },
+        { id: 2, title: 'سایر', provinces: [], is_default: true },
+      ]);
+
+      expect((await service.resolveZone('آذربايجان‌شرقی '))?.id).toBe(1);
+      expect((await service.resolveZone('كرمانشاه'))?.id).toBe(1);
+    });
+  });
+
+  describe('rates', () => {
+    // (method, zone) is unique across all rows, removed ones included, so
+    // re-adding a rate that was deleted used to hit the index with a 500.
+    it('brings a removed rate back instead of inserting a second row', async () => {
+      methods.findOne.mockResolvedValue(method());
+      zones.findOneBy.mockResolvedValue({ id: 3 });
+      rates.findOne.mockResolvedValue({
+        id: 9,
+        base_cost: 1,
+        per_kg_cost: 0,
+        is_active: true,
+        deleted_at: new Date(),
+      });
+
+      await service.upsertRate(1, { zoneId: 3, base_cost: 40_000 });
+
+      expect(rates.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ withDeleted: true }),
+      );
+      expect(rates.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 9, deleted_at: null, base_cost: 40_000 }),
+      );
+    });
   });
 
   describe('pricing (Toman)', () => {

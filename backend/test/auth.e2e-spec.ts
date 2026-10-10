@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import cookieParser from 'cookie-parser';
+import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { assertDisposableTestDatabase } from './assert-test-database';
 
@@ -140,11 +141,31 @@ describe('Auth (e2e)', () => {
     const secondCookie = extractRefreshTokenCookie(refreshRes);
     expect(secondCookie).not.toBe(firstCookie);
 
-    // The old (now-rotated-out) refresh token no longer works
+    // A second tab sending the same token right away still gets a pair -
+    // the two tabs share one cookie and refresh together.
+    const secondTabRes = await request(app.getHttpServer())
+      .post('/auth/refresh')
+      .set('Cookie', firstCookie);
+    expect(secondTabRes.status).toBe(200);
+    const siblingCookie = extractRefreshTokenCookie(secondTabRes);
+
+    // Past the grace window, the old (rotated-out) token is a replay: it
+    // fails, and takes every token of its chain with it.
+    await app
+      .get(DataSource)
+      .query(
+        'UPDATE `refresh_tokens` SET `usedAt` = DATE_SUB(`usedAt`, INTERVAL 5 MINUTE) WHERE `usedAt` IS NOT NULL',
+      );
     const reuseRes = await request(app.getHttpServer())
       .post('/auth/refresh')
       .set('Cookie', firstCookie);
     expect(reuseRes.status).toBe(401);
+    for (const cookie of [secondCookie, siblingCookie]) {
+      const res = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', cookie);
+      expect(res.status).toBe(401);
+    }
   });
 
   it('logout invalidates the refresh token', async () => {
@@ -162,5 +183,76 @@ describe('Auth (e2e)', () => {
       .post('/auth/refresh')
       .set('Cookie', cookie);
     expect(refreshAfterLogoutRes.status).toBe(401);
+  });
+
+  // Sign-up and "forgot password" must not tell anyone which numbers are
+  // registered. Two requests in a row used to answer 200/200 for one kind
+  // of number and 200/429 for the other.
+  it('answers sign-up and password reset the same whether or not the number is registered', async () => {
+    const fresh = `09${(Date.now() + 3).toString().slice(-9)}`;
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const signUpTwice = async (number: string) => {
+      const body = { mobile: number, password, display_name: 'Probe' };
+      const first = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send(body);
+      const second = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send(body);
+      return [first.status, second.status, second.body.code];
+    };
+    const resetTwice = async (number: string) => {
+      const first = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ mobile: number });
+      const second = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ mobile: number });
+      return [first.status, second.status, second.body.code];
+    };
+
+    const registered = await signUpTwice(mobile);
+    const unregistered = await signUpTwice(fresh);
+    expect(registered).toEqual([201, 429, 'OTP_COOLDOWN']);
+    expect(unregistered).toEqual(registered);
+
+    const freshForReset = `09${(Date.now() + 5).toString().slice(-9)}`;
+    expect(await resetTwice(freshForReset)).toEqual(await resetTwice(mobile));
+
+    // A wrong code against the registered number's sign-up fails like any
+    // wrong code, not with "nothing pending for this number".
+    const guess = await request(app.getHttpServer())
+      .post('/auth/verify-otp')
+      .send({ mobile, code: '000000' });
+    logSpy.mockRestore();
+    expect(guess.status).toBe(400);
+    expect(guess.body.code).toBe('OTP_INCORRECT');
+  });
+
+  // Sign-in is limited per mobile number, not per IP: a whole carrier can
+  // share one address, and one person hammering a number must not lock
+  // the others out.
+  it('limits sign-in attempts per number, not per address', async () => {
+    const target = `09${(Date.now() + 7).toString().slice(-9)}`;
+    for (let i = 0; i < 10; i++) {
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ mobile: target, password: 'WrongPassword1' });
+      expect(res.status).toBe(401);
+    }
+
+    // Same number typed in Persian digits is still the same number.
+    const persian = target.replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+    const blocked = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ mobile: persian, password: 'WrongPassword1' });
+    expect(blocked.status).toBe(429);
+
+    // Someone else on the same address signs in as usual.
+    const other = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ mobile, password });
+    expect(other.status).toBe(200);
   });
 });

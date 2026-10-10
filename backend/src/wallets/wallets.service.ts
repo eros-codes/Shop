@@ -62,7 +62,8 @@ export class WalletsService {
 
   private assertActive(wallet: Wallet): void {
     if (!wallet.is_active) {
-      throw new BadRequestException(
+      throw AppError.badRequest(
+        ErrorCodes.WALLET_INACTIVE,
         'This wallet is deactivated - reactivate it (POST /wallets) before using it',
       );
     }

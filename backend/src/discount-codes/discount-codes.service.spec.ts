@@ -11,6 +11,7 @@ import { DiscountCode } from './entities/discount-code.entity';
 import DiscountStatusEnum from './enums/discount-status.enum';
 import { AuditService } from '../audit/audit.service';
 import { Order } from '../orders/entities/order.entity';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 describe('DiscountCodesService', () => {
   let service: DiscountCodesService;
@@ -92,9 +93,9 @@ describe('DiscountCodesService', () => {
   describe('findValidByCode', () => {
     it('rejects a code that does not exist', async () => {
       repo.findOne.mockResolvedValue(null);
-      await expect(service.findValidByCode('NOPE')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.findValidByCode('NOPE')).rejects.toMatchObject({
+        code: ErrorCodes.DISCOUNT_NOT_FOUND,
+      });
     });
 
     it('rejects an inactive code', async () => {
@@ -103,9 +104,9 @@ describe('DiscountCodesService', () => {
         status: DiscountStatusEnum.Inactive,
         capacity: 5,
       });
-      await expect(service.findValidByCode('OLD')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.findValidByCode('OLD')).rejects.toMatchObject({
+        code: ErrorCodes.DISCOUNT_NOT_FOUND,
+      });
     });
 
     it('rejects a code with zero capacity left', async () => {
@@ -114,9 +115,9 @@ describe('DiscountCodesService', () => {
         status: DiscountStatusEnum.Active,
         capacity: 0,
       });
-      await expect(service.findValidByCode('USED')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.findValidByCode('USED')).rejects.toMatchObject({
+        code: ErrorCodes.DISCOUNT_EXHAUSTED,
+      });
     });
 
     it('accepts an active code with capacity remaining', async () => {
@@ -147,9 +148,9 @@ describe('DiscountCodesService', () => {
       qb.execute.mockResolvedValue({ affected: 0 });
       const code = { id: 4, capacity: 1, status: DiscountStatusEnum.Active };
 
-      await expect(service.consumeOne(code as any)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.consumeOne(code as any)).rejects.toMatchObject({
+        code: ErrorCodes.DISCOUNT_EXHAUSTED,
+      });
     });
   });
 
@@ -236,35 +237,37 @@ describe('DiscountCodesService', () => {
     });
 
     it('refuses a basket it does not apply to at all', async () => {
-      await expect(quote({ products: [{ id: 99 }] })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(quote({ products: [{ id: 99 }] })).rejects.toMatchObject({
+        code: ErrorCodes.DISCOUNT_NOT_APPLICABLE,
+      });
     });
 
     it('refuses an order below the minimum', async () => {
-      await expect(quote({ min_order_amount: 1_000_000 })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        quote({ min_order_amount: 1_000_000 }),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.DISCOUNT_MIN_ORDER_NOT_MET,
+      });
     });
 
     it('refuses a campaign that has not started', async () => {
       await expect(
         quote({ starts_at: new Date(Date.now() + 86_400_000) }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.DISCOUNT_NOT_STARTED });
     });
 
     it('refuses one that has ended', async () => {
       await expect(
         quote({ expires_at: new Date(Date.now() - 86_400_000) }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.DISCOUNT_EXPIRED });
     });
 
     it('refuses a customer who has had their share already', async () => {
       ordersRepo.count.mockResolvedValue(2);
 
-      await expect(quote({ per_user_limit: 2 })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(quote({ per_user_limit: 2 })).rejects.toMatchObject({
+        code: ErrorCodes.DISCOUNT_USER_LIMIT_REACHED,
+      });
     });
 
     it('allows one more while the customer is under the limit', async () => {

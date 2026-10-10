@@ -183,7 +183,7 @@ export class CommentsService {
   ): Promise<Comment> {
     const { comment, rate } = updateCommentDto;
 
-    await this.dataSource.transaction(async (manager) => {
+    const productId = await this.dataSource.transaction(async (manager) => {
       const existing = await manager
         .createQueryBuilder(Comment, 'comment')
         .select('comment.id', 'id')
@@ -214,7 +214,7 @@ export class CommentsService {
         'pessimistic_read',
       );
       if (comment === undefined && rate === undefined) {
-        return;
+        return null;
       }
 
       await manager.update(
@@ -226,8 +226,14 @@ export class CommentsService {
           status: CommentStatusEnum.Pending,
         },
       );
+      return Number(existing.productId);
     });
 
+    // An edit sends the review back to moderation, so its score leaves the
+    // product's average until it is approved again - it used to stay in.
+    if (productId) {
+      await this.refreshProductRating(productId);
+    }
     return this.findOne(id, { userId, isAdmin: false });
   }
 

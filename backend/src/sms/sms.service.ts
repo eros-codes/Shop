@@ -32,6 +32,12 @@ export class SmsService {
     return !!this.apiKey;
   }
 
+  // Whether a code can reach anyone at all. Outside production a code
+  // that cannot be sent is printed to the console instead.
+  get canSendOtp(): boolean {
+    return (!!this.apiKey && !!this.templateId) || !this.isProduction;
+  }
+
   async sendTemplate(
     mobile: string,
     templateId: string | number,
@@ -77,6 +83,31 @@ export class SmsService {
       };
     } catch (error) {
       return { delivered: false, error: `sms.ir request threw: ${error}` };
+    }
+  }
+
+  // Someone asked to sign up with a number that already has an account.
+  // Its owner gets this instead of a code: they may have forgotten they
+  // signed up, or someone else is trying their number. Optional - with no
+  // template set, nothing is sent and the sign-up form's own hint ("no
+  // code? you may already have an account") has to do.
+  async sendAccountExists(mobile: string): Promise<void> {
+    const templateId = this.configService.get<string>(
+      'SMSIR_ACCOUNT_EXISTS_TEMPLATE_ID',
+    );
+    if (!this.apiKey || !templateId) {
+      if (!this.isProduction) {
+        console.log(
+          `[SMS skipped] ${mobile} already has an account - no SMSIR_ACCOUNT_EXISTS_TEMPLATE_ID set`,
+        );
+      }
+      return;
+    }
+    const result = await this.sendTemplate(mobile, templateId, {
+      MOBILE: mobile,
+    });
+    if (!result.delivered) {
+      throw new Error(result.error ?? 'sms.ir did not accept the message');
     }
   }
 

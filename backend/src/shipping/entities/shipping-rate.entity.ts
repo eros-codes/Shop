@@ -54,5 +54,5 @@ export class ShippingRate {
   updated_at!: Date;
 
   @DeleteDateColumn({ name: 'deleted_at' })
-  deleted_at?: Date;
+  deleted_at?: Date | null;
 }

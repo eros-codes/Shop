@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { ReturnRequest } from './entities/return-request.entity';
 import { ReturnItem } from './entities/return-item.entity';
 import ReturnStatusEnum from './enums/return-status.enum';
@@ -27,6 +27,8 @@ import {
   CatalogCacheScope,
   CatalogCacheService,
 } from '../common/cache/catalog-cache.service';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 const DEFAULT_RETURN_WINDOW_DAYS = 7;
 
@@ -66,8 +68,6 @@ export class ReturnsService {
     private readonly requests: Repository<ReturnRequest>,
     @InjectRepository(ReturnItem)
     private readonly returnItems: Repository<ReturnItem>,
-    @InjectRepository(Order)
-    private readonly orders: Repository<Order>,
     private readonly walletsService: WalletsService,
     private readonly auditService: AuditService,
     private readonly configService: ConfigService,
@@ -86,82 +86,116 @@ export class ReturnsService {
     userId: number,
     dto: CreateReturnRequestDto,
   ): Promise<ReturnRequest> {
-    const order = await this.orders.findOne({
-      where: { id: dto.orderId },
-      relations: { user: true, items: { product: true, variant: true } },
-    });
-    if (!order) {
-      throw new NotFoundException(`Order with id ${dto.orderId} not found`);
-    }
-    if (order.user.id !== userId) {
-      throw new ForbiddenException('This order does not belong to you');
-    }
-
-    if (order.status !== OrderStatusEnum.Delivered) {
-      throw new BadRequestException(
-        'Only delivered orders can be returned - cancel it instead if it has not arrived yet',
-      );
-    }
-    const deliveredAt = order.delivered_at ?? order.updatedAt;
-    const daysSince =
-      (Date.now() - deliveredAt.getTime()) / (24 * 60 * 60 * 1000);
-    if (daysSince > this.windowDays) {
-      throw new BadRequestException(
-        `The ${this.windowDays}-day return window for this order has passed`,
+    // One entry per order line. Listed twice ({line 11, 2} and {line 11,
+    // 2}), each copy used to be checked against what was left on its own,
+    // so a request could hold - and refund, and put back into stock - more
+    // units than were ever bought.
+    const wanted = new Map<number, number>();
+    for (const line of dto.items) {
+      wanted.set(
+        line.orderItemId,
+        (wanted.get(line.orderItemId) ?? 0) + line.quantity,
       );
     }
 
-    const alreadyReturned = await this.returnedQuantities(order.id);
-    const orderItems = new Map(order.items.map((item) => [item.id, item]));
-
-    const items = dto.items.map((line) => {
-      const orderItem = orderItems.get(line.orderItemId);
-      if (!orderItem) {
-        throw new BadRequestException(
-          `Item ${line.orderItemId} is not part of this order`,
-        );
-      }
-      const remaining =
-        orderItem.quantity - (alreadyReturned.get(orderItem.id) ?? 0);
-      if (line.quantity > remaining) {
-        throw new BadRequestException(
-          remaining > 0
-            ? `You can only return ${remaining} more of "${orderItem.product?.title ?? 'this item'}"`
-            : `"${orderItem.product?.title ?? 'This item'}" has already been returned`,
-        );
-      }
-      return this.returnItems.create({
-        orderItem: { id: orderItem.id } as OrderItem,
-        quantity: line.quantity,
+    const savedId = await this.dataSource.transaction(async (manager) => {
+      const ordersRepo = manager.getRepository(Order);
+      // Two requests for the same order are judged one after the other;
+      // read side by side, both saw nothing returned yet.
+      const locked = await ordersRepo.findOne({
+        select: { id: true },
+        where: { id: dto.orderId },
+        lock: { mode: 'pessimistic_write' },
       });
-    });
+      if (!locked) {
+        throw new NotFoundException(`Order with id ${dto.orderId} not found`);
+      }
+      const order = await ordersRepo.findOne({
+        where: { id: dto.orderId },
+        relations: { user: true, items: { product: true, variant: true } },
+      });
+      if (!order) {
+        throw new NotFoundException(`Order with id ${dto.orderId} not found`);
+      }
+      if (order.user.id !== userId) {
+        throw new ForbiddenException('This order does not belong to you');
+      }
 
-    const saved = await this.requests.save(
-      this.requests.create({
-        order: { id: order.id } as Order,
-        user: { id: userId } as never,
-        items,
-        reason: dto.reason,
-        description: dto.description ?? null,
-        status: ReturnStatusEnum.Requested,
-      }),
-    );
+      if (order.status !== OrderStatusEnum.Delivered) {
+        throw AppError.badRequest(
+          ErrorCodes.RETURN_NOT_ALLOWED,
+          'Only delivered orders can be returned - cancel it instead if it has not arrived yet',
+        );
+      }
+      const deliveredAt = order.delivered_at ?? order.updatedAt;
+      const daysSince =
+        (Date.now() - deliveredAt.getTime()) / (24 * 60 * 60 * 1000);
+      if (daysSince > this.windowDays) {
+        throw AppError.badRequest(
+          ErrorCodes.RETURN_WINDOW_CLOSED,
+          `The ${this.windowDays}-day return window for this order has passed`,
+          { windowDays: this.windowDays },
+        );
+      }
+
+      const alreadyReturned = await this.returnedQuantities(manager, order.id);
+      const orderItems = new Map(order.items.map((item) => [item.id, item]));
+
+      const items = [...wanted].map(([orderItemId, quantity]) => {
+        const orderItem = orderItems.get(orderItemId);
+        if (!orderItem) {
+          throw new BadRequestException(
+            `Item ${orderItemId} is not part of this order`,
+          );
+        }
+        const remaining =
+          orderItem.quantity - (alreadyReturned.get(orderItem.id) ?? 0);
+        if (quantity > remaining) {
+          throw AppError.badRequest(
+            ErrorCodes.RETURN_QUANTITY_EXCEEDED,
+            remaining > 0
+              ? `You can only return ${remaining} more of "${orderItem.product?.title ?? 'this item'}"`
+              : `"${orderItem.product?.title ?? 'This item'}" has already been returned`,
+            { orderItemId, remaining },
+          );
+        }
+        return this.returnItems.create({
+          orderItem: { id: orderItem.id } as OrderItem,
+          quantity,
+        });
+      });
+
+      const requests = manager.getRepository(ReturnRequest);
+      const saved = await requests.save(
+        requests.create({
+          order: { id: order.id } as Order,
+          user: { id: userId } as never,
+          items,
+          reason: dto.reason,
+          description: dto.description ?? null,
+          status: ReturnStatusEnum.Requested,
+        }),
+      );
+      return saved.id;
+    });
 
     await this.auditService.record({
       action: 'return.requested',
       entityType: 'return_request',
-      entityId: saved.id,
+      entityId: savedId,
       actor: { userId },
-      changes: { orderId: order.id, reason: dto.reason },
+      changes: { orderId: dto.orderId, reason: dto.reason },
     });
 
-    return this.findOne(saved.id);
+    return this.findOne(savedId);
   }
 
   private async returnedQuantities(
+    manager: EntityManager,
     orderId: number,
   ): Promise<Map<number, number>> {
-    const rows = await this.returnItems
+    const rows = await manager
+      .getRepository(ReturnItem)
       .createQueryBuilder('item')
       .innerJoin('item.returnRequest', 'request')
       .select('item.order_item_id', 'orderItemId')
@@ -281,10 +315,24 @@ export class ReturnsService {
       if (dto.status === ReturnStatusEnum.Refunded) {
         const amount = this.refundAmountFor(request);
         const order = request.order;
-        const remaining = order.total_price - order.refunded_amount;
+        // What has been refunded so far is read under a lock: two returns of
+        // the same order refunded side by side both saw the same total and
+        // both wrote "previous + mine", losing one of them.
+        const current = await manager.getRepository(Order).findOne({
+          select: { id: true, total_price: true, refunded_amount: true },
+          where: { id: order.id },
+          withDeleted: true,
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!current) {
+          throw new NotFoundException(`Order with id ${order.id} not found`);
+        }
+        const remaining = current.total_price - current.refunded_amount;
         if (amount > remaining) {
-          throw new BadRequestException(
+          throw AppError.badRequest(
+            ErrorCodes.REFUND_EXCEEDS_PAID,
             'This refund would give back more than the customer paid for the order',
+            { amount, remaining },
           );
         }
 
@@ -298,7 +346,7 @@ export class ReturnsService {
           .getRepository(Order)
           .update(
             { id: order.id },
-            { refunded_amount: order.refunded_amount + amount },
+            { refunded_amount: current.refunded_amount + amount },
           );
         request.refund_amount = amount;
 
@@ -367,7 +415,17 @@ export class ReturnsService {
         `A return that is already ${request.status} cannot be cancelled`,
       );
     }
-    await this.requests.update({ id }, { status: ReturnStatusEnum.Cancelled });
+    // Conditional, so an approval landing at the same moment wins rather
+    // than being overwritten by the customer's cancel.
+    const { affected } = await this.requests.update(
+      { id, status: ReturnStatusEnum.Requested },
+      { status: ReturnStatusEnum.Cancelled },
+    );
+    if (!affected) {
+      throw new BadRequestException(
+        'This return has just been picked up by the shop and can no longer be cancelled',
+      );
+    }
   }
 
   // The goods at what they were sold for, plus their share of the tax.

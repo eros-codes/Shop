@@ -1,5 +1,6 @@
 import { EntityManager, In } from 'typeorm';
 import { ProductVariant } from '../entities/product-variant.entity';
+import { Product } from '../entities/product.entity';
 
 export interface StockLine {
   variantId: number;
@@ -34,13 +35,6 @@ export async function restoreStock(
 
   const variantIds = [...totals.keys()].sort((a, b) => a - b);
   const variants = manager.getRepository(ProductVariant);
-  for (const variantId of variantIds) {
-    await variants.increment(
-      { id: variantId },
-      'stock',
-      totals.get(variantId)!,
-    );
-  }
 
   const owners = await variants.find({
     select: { id: true, product: { id: true } },
@@ -51,6 +45,29 @@ export async function restoreStock(
   const productIds = [
     ...new Set(owners.map((variant) => variant.product.id)),
   ].sort((a, b) => a - b);
+
+  // Checkout locks product rows and then their variants. Giving stock back
+  // used to take them the other way round - variants by the increment,
+  // products by the sync below - so a cancellation and a checkout of the
+  // same product could each hold what the other was waiting for.
+  if (productIds.length > 0) {
+    await manager.find(Product, {
+      select: { id: true },
+      where: { id: In(productIds) },
+      withDeleted: true,
+      order: { id: 'ASC' },
+      lock: { mode: 'pessimistic_write' },
+    });
+  }
+
+  for (const variantId of variantIds) {
+    await variants.increment(
+      { id: variantId },
+      'stock',
+      totals.get(variantId)!,
+    );
+  }
+
   await syncProductStock(manager, productIds);
   return productIds;
 }

@@ -21,7 +21,13 @@ import { ErrorCodes } from '../common/errors/error-codes';
 const MAX_OPEN_THREADS_PER_USER = 10;
 const TICKET_COOLDOWN_SECONDS = 30;
 
-const TICKET_USER_FIELDS = ['user.id', 'user.display_name', 'user.mobile'];
+// Who wrote each message. A customer reading their thread gets the support
+// agent's name only - the mobile number is for staff, who need it to reach
+// the customer.
+const ticketUserFields = (isAdmin: boolean): string[] =>
+  isAdmin
+    ? ['user.id', 'user.display_name', 'user.mobile']
+    : ['user.id', 'user.display_name'];
 
 @Injectable()
 export class TicketsService {
@@ -142,7 +148,7 @@ export class TicketsService {
     const qb = this.ticketRepository
       .createQueryBuilder('ticket')
       .leftJoin('ticket.user', 'user')
-      .addSelect(TICKET_USER_FIELDS)
+      .addSelect(ticketUserFields(isAdmin))
       .where('ticket.reply_to IS NULL');
 
     if (!isAdmin) {
@@ -164,11 +170,11 @@ export class TicketsService {
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
-  async findOne(id: number): Promise<Ticket> {
+  async findOne(id: number, isAdmin = false): Promise<Ticket> {
     const ticket = await this.ticketRepository
       .createQueryBuilder('ticket')
       .leftJoin('ticket.user', 'user')
-      .addSelect(TICKET_USER_FIELDS)
+      .addSelect(ticketUserFields(isAdmin))
       .leftJoinAndSelect('ticket.reply_to', 'parent')
       .where('ticket.id = :id', { id })
       .getOne();
@@ -203,13 +209,14 @@ export class TicketsService {
   async findReplies(
     ticketId: number,
     query: PaginationQueryDto,
+    isAdmin = false,
   ): Promise<PaginatedResult<Ticket>> {
     const { page, limit } = query;
 
     const [items, total] = await this.ticketRepository
       .createQueryBuilder('ticket')
       .leftJoin('ticket.user', 'user')
-      .addSelect(TICKET_USER_FIELDS)
+      .addSelect(ticketUserFields(isAdmin))
       .where('ticket.reply_to = :ticketId', { ticketId })
       .orderBy('ticket.created_at', 'ASC')
       .addOrderBy('ticket.id', 'ASC')

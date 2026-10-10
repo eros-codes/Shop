@@ -32,6 +32,7 @@ const MESSAGES = {
   COD_LIMIT_EXCEEDED: 'مبلغ سفارش برای پرداخت در محل زیاد است؛ لطفاً آنلاین پرداخت کنید.',
   IDEMPOTENCY_KEY_REQUIRED: 'درخواست ناقص بود؛ دوباره تلاش کنید.',
   ORDER_NOT_EDITABLE: 'این سفارش دیگر قابل ویرایش نیست.',
+  ORDER_NOT_CANCELLABLE: 'این سفارش دیگر قابل لغو نیست؛ با پشتیبانی تماس بگیرید.',
   INVALID_STATUS_TRANSITION: 'این تغییر وضعیت ممکن نیست.',
 
   INSUFFICIENT_WALLET_BALANCE: 'موجودی کیف پول کافی نیست.',
@@ -54,6 +55,8 @@ const MESSAGES = {
   OTP_EXPIRED: 'کد منقضی شده است؛ لطفاً کد جدید بگیرید.',
   OTP_ATTEMPTS_EXCEEDED: 'تعداد تلاش‌ها زیاد بود؛ لطفاً کد جدید بگیرید.',
   OTP_NOT_FOUND: 'درخواستی برای این شماره ثبت نشده است.',
+  OTP_COOLDOWN: 'کد قبلی همین الان فرستاده شد؛ کمی صبر کنید و دوباره درخواست کنید.',
+  OTP_SEND_LIMIT: 'برای این شماره کد زیادی درخواست شده است؛ کمی بعد دوباره تلاش کنید.',
   CURRENT_PASSWORD_INCORRECT: 'رمز عبور فعلی درست نیست.',
 
   RETURN_WINDOW_CLOSED: 'مهلت مرجوع‌کردن این سفارش گذشته است.',
@@ -88,6 +91,13 @@ function withDetails(code, details) {
   }
   if (code === 'OTP_INCORRECT' && details.attemptsLeft !== undefined) {
     return `کد واردشده درست نیست. ${details.attemptsLeft} تلاش دیگر باقی مانده است.`;
+  }
+  if (code === 'OTP_COOLDOWN' && details.retryAfter !== undefined) {
+    return `لطفاً ${Number(details.retryAfter).toLocaleString('fa-IR')} ثانیه دیگر دوباره کد بگیرید.`;
+  }
+  if (code === 'OTP_SEND_LIMIT' && details.retryAfter !== undefined) {
+    const minutes = Math.ceil(Number(details.retryAfter) / 60);
+    return `برای این شماره کد زیادی درخواست شده است؛ ${minutes.toLocaleString('fa-IR')} دقیقه دیگر دوباره تلاش کنید.`;
   }
   if (code === 'TICKET_COOLDOWN' && details.retryAfter !== undefined) {
     return `لطفاً ${Number(details.retryAfter).toLocaleString('fa-IR')} ثانیه دیگر دوباره بفرستید.`;

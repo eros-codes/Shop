@@ -8,7 +8,6 @@ import {
   Delete,
   Query,
   UseGuards,
-  BadRequestException,
   ForbiddenException,
   Headers,
 } from '@nestjs/common';
@@ -27,6 +26,9 @@ import {
 } from '../auth/decorators/current-user.decorator';
 import { ParseIdPipe } from '../common/pipes/parse-id.pipe';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 @UseGuards(JwtAuthGuard)
 @ApiTags('Orders')
@@ -34,6 +36,9 @@ import { ApiTags } from '@nestjs/swagger';
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
+  // Each attempt may try a discount code or open a gateway session, so it
+  // keeps a tighter limit than the site-wide one.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post()
   async create(
     @Body() createOrderDto: CreateOrderDto,
@@ -41,7 +46,8 @@ export class OrdersController {
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     if (!idempotencyKey || !/^[A-Za-z0-9_-]{8,64}$/.test(idempotencyKey)) {
-      throw new BadRequestException(
+      throw AppError.badRequest(
+        ErrorCodes.IDEMPOTENCY_KEY_REQUIRED,
         'An Idempotency-Key header is required: 8-64 characters of A-Z, a-z, 0-9, "-" or "_", unique per checkout attempt (a UUID works well)',
       );
     }
@@ -118,6 +124,9 @@ export class OrdersController {
     return { data: updatedOrder, message: 'Order status updated successfully' };
   }
 
+  // Staff delete; a customer's DELETE cancels instead. A deleted order
+  // vanishes from the panel, and a customer must not be able to make an
+  // order - least of all a refunded one - disappear from the shop's books.
   @Delete(':id')
   async remove(
     @Param('id', ParseIdPipe) id: number,
@@ -128,6 +137,13 @@ export class OrdersController {
     const isAdmin = currentUser.role === userRoleEnum.AdminUser;
     if (!isOwner && !isAdmin) {
       throw new ForbiddenException('You can only delete your own orders');
+    }
+    if (!isAdmin) {
+      const cancelled = await this.ordersService.cancelByCustomer(id, {
+        userId: currentUser.userId,
+        label: currentUser.mobile ?? null,
+      });
+      return { data: cancelled, message: 'Order Cancelled Successfully' };
     }
     await this.ordersService.remove(id);
     return { message: 'Order Deleted Successfully' };

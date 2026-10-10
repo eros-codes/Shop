@@ -2,8 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { DataSource } from 'typeorm';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { DataSource, QueryFailedError } from 'typeorm';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { createHmac } from 'crypto';
 import { AuthService } from './auth.service';
@@ -33,6 +33,7 @@ const mockRepo = () => ({
   save: jest.fn((data) => Promise.resolve({ id: 1, ...data })),
   remove: jest.fn(),
   delete: jest.fn(),
+  update: jest.fn().mockResolvedValue({ affected: 1 }),
   createQueryBuilder: jest.fn(() => refreshQueryBuilder),
 });
 
@@ -44,7 +45,11 @@ describe('AuthService', () => {
   let otpRepository: ReturnType<typeof mockRepo>;
   let refreshTokenRepository: ReturnType<typeof mockRepo>;
   let mockManager: { getRepository: jest.Mock };
-  let smsService: { sendOtp: jest.Mock };
+  let smsService: {
+    sendOtp: jest.Mock;
+    sendAccountExists: jest.Mock;
+    canSendOtp: boolean;
+  };
 
   beforeEach(async () => {
     refreshQueryBuilder = {};
@@ -53,7 +58,11 @@ describe('AuthService', () => {
     }
     refreshQueryBuilder.execute = jest.fn().mockResolvedValue({ affected: 1 });
     refreshTokenRepository = mockRepo();
-    smsService = { sendOtp: jest.fn() };
+    smsService = {
+      sendOtp: jest.fn().mockResolvedValue(undefined),
+      sendAccountExists: jest.fn().mockResolvedValue(undefined),
+      canSendOtp: true,
+    };
     otpRepository = mockRepo();
 
     mockManager = {
@@ -104,8 +113,11 @@ describe('AuthService', () => {
   afterEach(() => jest.clearAllMocks());
 
   describe('register (step 1 - send OTP)', () => {
-    it('returns the same shape for an existing account WITHOUT creating an OTP or sending anything', async () => {
+    // Skipping the bookkeeping for known numbers is what gave them away:
+    // a second request in a row answered 200 for them and 429 for others.
+    it('treats a registered number like any other: a row, the same answer, no code', async () => {
       usersService.findOneByMobile.mockResolvedValue({ id: 1 });
+      otpRepository.findOneBy.mockResolvedValue(null);
 
       const result = await service.register({
         mobile: '09120000000',
@@ -114,7 +126,95 @@ describe('AuthService', () => {
       });
 
       expect(result).toEqual({ mobile: '09120000000' });
+      const saved = otpRepository.save.mock.calls[0][0];
+      expect(saved).toMatchObject({
+        purpose: OtpPurposeEnum.Register,
+        sendCount: 1,
+        hashedPassword: null,
+      });
+      // A decoy: no six-digit code hashes to it.
+      expect(saved.codeHash).toMatch(/^[0-9a-f]{64}$/);
+      for (const guess of ['000000', '123456', '999999']) {
+        expect(saved.codeHash).not.toBe(hashOtpForTest(guess));
+      }
+      expect(smsService.sendOtp).not.toHaveBeenCalled();
+      expect(smsService.sendAccountExists).toHaveBeenCalledWith('09120000000');
+    });
+
+    it('applies the resend cooldown to a registered number too', async () => {
+      usersService.findOneByMobile.mockResolvedValue({ id: 1 });
+      otpRepository.findOneBy.mockResolvedValue({
+        id: 1,
+        mobile: '09120000000',
+        createdAt: new Date(),
+        lastSentAt: new Date(),
+      });
+
+      await expect(
+        service.register({
+          mobile: '09120000000',
+          password: 'Password123',
+          display_name: 'Test',
+        }),
+      ).rejects.toMatchObject({
+        status: 429,
+        code: ErrorCodes.OTP_COOLDOWN,
+        details: { retryAfter: expect.any(Number) },
+      });
+    });
+
+    it('answers 429, not a 500, when two requests for a new number race', async () => {
+      usersService.findOneByMobile.mockResolvedValue(null);
+      otpRepository.findOneBy.mockResolvedValue(null);
+      otpRepository.save.mockRejectedValueOnce(
+        new QueryFailedError('INSERT', [], {
+          code: 'ER_DUP_ENTRY',
+          errno: 1062,
+        } as any),
+      );
+
+      await expect(
+        service.register({
+          mobile: '09120000000',
+          password: 'Password123',
+          display_name: 'Test',
+        }),
+      ).rejects.toMatchObject({ status: 429, code: ErrorCodes.OTP_COOLDOWN });
+    });
+
+    it('refuses up front, for every number, when no SMS can be sent', async () => {
+      smsService.canSendOtp = false;
+
+      await expect(
+        service.register({
+          mobile: '09120000000',
+          password: 'Password123',
+          display_name: 'Test',
+        }),
+      ).rejects.toMatchObject({ status: 503 });
       expect(otpRepository.save).not.toHaveBeenCalled();
+    });
+
+    // The SMS goes out after the answer, so a failure cannot be reported.
+    // Lifting the cooldown lets "send again" work straight away.
+    it('lifts the cooldown when the code could not be sent', async () => {
+      usersService.findOneByMobile.mockResolvedValue(null);
+      otpRepository.findOneBy.mockResolvedValue(null);
+      smsService.sendOtp.mockRejectedValueOnce(new Error('sms.ir down'));
+
+      await service.register({
+        mobile: '09120000000',
+        password: 'Password123',
+        display_name: 'Test',
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(otpRepository.update).toHaveBeenCalledWith(
+        { mobile: '09120000000', purpose: OtpPurposeEnum.Register },
+        { lastSentAt: expect.any(Date) },
+      );
+      const { lastSentAt } = otpRepository.update.mock.calls[0][1];
+      expect(Date.now() - lastSentAt.getTime()).toBeGreaterThanOrEqual(60_000);
     });
 
     it('creates a pending OTP record with a hashed password, not the account itself', async () => {
@@ -177,7 +277,11 @@ describe('AuthService', () => {
           password: 'Password123',
           display_name: 'Test',
         }),
-      ).rejects.toMatchObject({ status: 429 });
+      ).rejects.toMatchObject({
+        status: 429,
+        code: ErrorCodes.OTP_SEND_LIMIT,
+        details: { retryAfter: expect.any(Number) },
+      });
       expect(otpRepository.save).not.toHaveBeenCalled();
     });
 
@@ -225,15 +329,19 @@ describe('AuthService', () => {
   });
 
   describe('verifyOtp (step 2 - confirm code, create account)', () => {
+    const pending = (overrides: Record<string, unknown> = {}) => ({
+      id: 11,
+      mobile: '09120000000',
+      codeHash: hashOtpForTest('123456'),
+      displayName: 'Test',
+      hashedPassword: 'already-hashed',
+      expiresAt: new Date(Date.now() + 60000),
+      attempts: 0,
+      ...overrides,
+    });
+
     it('creates the account and returns tokens when the code matches', async () => {
-      otpRepository.findOneBy.mockResolvedValue({
-        mobile: '09120000000',
-        codeHash: hashOtpForTest('123456'),
-        displayName: 'Test',
-        hashedPassword: 'already-hashed',
-        expiresAt: new Date(Date.now() + 60000),
-        attempts: 0,
-      });
+      otpRepository.findOne.mockResolvedValue(pending());
       usersService.createWithHashedPassword.mockResolvedValue({
         id: 1,
         mobile: '09120000000',
@@ -250,18 +358,38 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('user');
     });
 
-    it('rejects an incorrect code, increments attempts, without creating an account', async () => {
-      const otp = {
-        mobile: '09120000000',
-        codeHash: hashOtpForTest('654321'),
-        expiresAt: new Date(Date.now() + 60000),
-        attempts: 0,
-      };
-      otpRepository.findOneBy.mockResolvedValue(otp);
+    // Parallel guesses used to read the same `attempts` and all get
+    // compared; the lock makes them queue behind each other.
+    it('reads the pending code under a write lock inside a transaction', async () => {
+      otpRepository.findOne.mockResolvedValue(pending());
+      usersService.createWithHashedPassword.mockResolvedValue({ id: 1 });
+
+      await service.verifyOtp({ mobile: '09120000000', code: '123456' });
+
+      expect(otpRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+      );
+    });
+
+    it('uses a correct code up in the same transaction, so it works once', async () => {
+      otpRepository.findOne.mockResolvedValue(pending());
+      usersService.createWithHashedPassword.mockResolvedValue({ id: 1 });
+
+      await service.verifyOtp({ mobile: '09120000000', code: '123456' });
+
+      expect(otpRepository.delete).toHaveBeenCalledWith({ id: 11 });
+    });
+
+    it('rejects an incorrect code, counts the attempt, creates nothing', async () => {
+      const otp = pending({ codeHash: hashOtpForTest('654321') });
+      otpRepository.findOne.mockResolvedValue(otp);
 
       await expect(
         service.verifyOtp({ mobile: '09120000000', code: '000000' }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({
+        code: ErrorCodes.OTP_INCORRECT,
+        details: { attemptsLeft: 4 },
+      });
       expect(usersService.createWithHashedPassword).not.toHaveBeenCalled();
       expect(otpRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ attempts: 1 }),
@@ -269,31 +397,45 @@ describe('AuthService', () => {
     });
 
     it('invalidates the code entirely after too many wrong attempts', async () => {
-      const otp = {
-        mobile: '09120000000',
-        codeHash: hashOtpForTest('654321'),
-        expiresAt: new Date(Date.now() + 60000),
-        attempts: 4,
-      };
-      otpRepository.findOneBy.mockResolvedValue(otp);
+      otpRepository.findOne.mockResolvedValue(
+        pending({ codeHash: hashOtpForTest('654321'), attempts: 4 }),
+      );
 
       await expect(
         service.verifyOtp({ mobile: '09120000000', code: '000000' }),
-      ).rejects.toThrow(BadRequestException);
-      expect(otpRepository.remove).toHaveBeenCalledWith(otp);
+      ).rejects.toMatchObject({ code: ErrorCodes.OTP_ATTEMPTS_EXCEEDED });
+      expect(otpRepository.delete).toHaveBeenCalledWith({ id: 11 });
     });
 
     it('rejects an expired code', async () => {
-      otpRepository.findOneBy.mockResolvedValue({
-        mobile: '09120000000',
-        codeHash: 'irrelevant',
-        expiresAt: new Date(Date.now() - 60000),
-        attempts: 0,
-      });
+      otpRepository.findOne.mockResolvedValue(
+        pending({ expiresAt: new Date(Date.now() - 60000) }),
+      );
 
       await expect(
         service.verifyOtp({ mobile: '09120000000', code: '123456' }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.OTP_EXPIRED });
+    });
+
+    it('says when there is no code to check', async () => {
+      otpRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.verifyOtp({ mobile: '09120000000', code: '123456' }),
+      ).rejects.toMatchObject({ code: ErrorCodes.OTP_NOT_FOUND });
+    });
+
+    it('answers 409, not 500, when the number got registered meanwhile', async () => {
+      otpRepository.findOne.mockResolvedValue(pending());
+      const duplicate = Object.assign(
+        new QueryFailedError('INSERT', [], new Error('dup')),
+        { driverError: { code: 'ER_DUP_ENTRY', errno: 1062 } },
+      );
+      usersService.createWithHashedPassword.mockRejectedValue(duplicate);
+
+      await expect(
+        service.verifyOtp({ mobile: '09120000000', code: '123456' }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 
@@ -391,7 +533,7 @@ describe('AuthService', () => {
       refreshTokenRepository.findOne.mockResolvedValue({
         id: 1,
         familyId: 'family-1',
-        usedAt: new Date(Date.now() - 5000),
+        usedAt: new Date(Date.now() - 5 * 60 * 1000),
         expiresAt: new Date(Date.now() + 60000),
         user: { id: 7, role: 'user' },
       });
@@ -403,6 +545,26 @@ describe('AuthService', () => {
         familyId: 'family-1',
       });
       expect(refreshTokenRepository.save).not.toHaveBeenCalled();
+    });
+
+    // Two tabs, one cookie: both refresh with the same token. The second
+    // used to look like a theft and signed the customer out everywhere.
+    it('gives a second tab a fresh pair when the token was used moments ago', async () => {
+      refreshTokenRepository.findOne.mockResolvedValue({
+        id: 1,
+        familyId: 'family-1',
+        usedAt: new Date(Date.now() - 2000),
+        expiresAt: new Date(Date.now() + 60000),
+        user: { id: 7, role: 'user' },
+      });
+
+      const result = await service.refresh('token-the-other-tab-just-used');
+
+      expect(result).toHaveProperty('refreshToken');
+      expect(refreshTokenRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ familyId: 'family-1' }),
+      );
+      expect(refreshTokenRepository.delete).not.toHaveBeenCalled();
     });
 
     it('refuses to issue a pair if the token was consumed by a parallel request', async () => {
@@ -468,11 +630,36 @@ describe('AuthService', () => {
     // find out which numbers are registered.
     it('answers the same for a number with no account, and sends nothing', async () => {
       usersService.findOneByMobile.mockResolvedValue(null);
+      otpRepository.findOneBy.mockResolvedValue(null);
 
       await expect(service.forgotPassword('09120000000')).resolves.toEqual({
         mobile: '09120000000',
       });
       expect(smsService.sendOtp).not.toHaveBeenCalled();
+      expect(smsService.sendAccountExists).not.toHaveBeenCalled();
+      // ...but counts the request like any other, so the next one within
+      // the minute is a 429 for this number as well.
+      expect(otpRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          purpose: OtpPurposeEnum.PasswordReset,
+          sendCount: 1,
+        }),
+      );
+    });
+
+    it('applies the resend cooldown to a number with no account', async () => {
+      usersService.findOneByMobile.mockResolvedValue(null);
+      otpRepository.findOneBy.mockResolvedValue({
+        id: 1,
+        mobile: '09120000000',
+        purpose: OtpPurposeEnum.PasswordReset,
+        createdAt: new Date(),
+        lastSentAt: new Date(),
+      });
+
+      await expect(service.forgotPassword('09120000000')).rejects.toMatchObject(
+        { status: 429, code: ErrorCodes.OTP_COOLDOWN },
+      );
     });
 
     it('sends a reset code of its own, separate from any signup code', async () => {
@@ -488,7 +675,7 @@ describe('AuthService', () => {
     });
 
     it('refuses a wrong code and counts the attempt', async () => {
-      otpRepository.findOneBy.mockResolvedValue({
+      otpRepository.findOne.mockResolvedValue({
         id: 1,
         mobile: '09120000000',
         codeHash: 'not-this',
@@ -510,7 +697,7 @@ describe('AuthService', () => {
     it('signs every session out once the password is replaced', async () => {
       const code = '123456';
       const hash = createHmac('sha256', OTP_SECRET).update(code).digest('hex');
-      otpRepository.findOneBy.mockResolvedValue({
+      otpRepository.findOne.mockResolvedValue({
         id: 1,
         mobile: '09120000000',
         codeHash: hash,

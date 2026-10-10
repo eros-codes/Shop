@@ -17,10 +17,16 @@ import userRoleEnum from './enums/userRoleEnum';
 import { BasketItem } from './entities/basket-item.entity';
 import { AuditActor, AuditService } from '../audit/audit.service';
 import { ProductVariant } from '../products/entities/product-variant.entity';
-import { lockActiveProduct } from '../products/utils/product-locks';
+import {
+  assertPublished,
+  lockActiveProduct,
+} from '../products/utils/product-locks';
 import { lockUserRow } from './utils/lock-user-row';
 import { isDemoMode, isLockedDemoAccount } from '../common/demo/demo-accounts';
 import { AppError } from '../common/errors/app-error';
+import { PaginatedResult } from '../common/interfaces/paginated-result.interface';
+import { escapeLikePattern } from '../products/utils/product-search';
+import { toAsciiDigits } from '../common/validation/normalize';
 import { ErrorCodes } from '../common/errors/error-codes';
 
 export const MAX_BASKET_LINES = 100;
@@ -109,14 +115,28 @@ export class UsersService {
     return this.findOne(saved.id);
   }
 
-  async findAll(query: FilterUserDto): Promise<User[]> {
-    const { role, page, limit } = query;
-    const userQuery = this.userRepository.createQueryBuilder('users');
+  // Paged with a total, like every other admin list. It used to return a
+  // bare array, so the panel could never show past the first page, and its
+  // search box sent a `search` the DTO rejected.
+  async findAll(query: FilterUserDto): Promise<PaginatedResult<User>> {
+    const { role, search, page, limit } = query;
+    const userQuery = this.userRepository
+      .createQueryBuilder('users')
+      .orderBy('users.id', 'DESC');
     if (role) {
-      userQuery.where('users.role = :role', { role });
+      userQuery.andWhere('users.role = :role', { role });
     }
-    userQuery.skip((page - 1) * limit).take(limit);
-    return userQuery.getMany();
+    if (search) {
+      userQuery.andWhere(
+        '(users.mobile LIKE :term OR users.display_name LIKE :term)',
+        { term: `%${escapeLikePattern(toAsciiDigits(search))}%` },
+      );
+    }
+    const [items, total] = await userQuery
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async findOne(id: number) {
@@ -227,6 +247,7 @@ export class UsersService {
         productId,
         'pessimistic_read',
       );
+      assertPublished(product);
       const variant = await this.resolveBasketVariant(
         manager,
         productId,
@@ -298,7 +319,13 @@ export class UsersService {
     for (const line of lines) {
       try {
         await this.dataSource.transaction(async (manager) => {
-          await lockActiveProduct(manager, line.productId, 'pessimistic_read');
+          assertPublished(
+            await lockActiveProduct(
+              manager,
+              line.productId,
+              'pessimistic_read',
+            ),
+          );
           const variant = await this.resolveBasketVariant(
             manager,
             line.productId,
@@ -349,17 +376,30 @@ export class UsersService {
     await this.dataSource.transaction(async (manager) => {
       await lockUserRow(manager, userId);
 
-      const variant = await this.resolveBasketVariant(
-        manager,
-        productId,
-        variantId,
-      );
+      // Found by what is in the basket, not by what is on sale. This used
+      // to go through the "is this option for sale" check, so a line whose
+      // option the shop had since switched off could never be removed - and
+      // checkout refused it too, leaving the customer stuck.
       const basketItems = manager.getRepository(BasketItem);
-      const existing = await this.findBasketLine(
-        basketItems,
-        userId,
-        variant.id,
-      );
+      let existing: BasketItem | null;
+      if (variantId) {
+        existing = await this.findBasketLine(basketItems, userId, variantId);
+      } else {
+        const lines = await basketItems
+          .createQueryBuilder('item')
+          .select(['item.id', 'item.quantity'])
+          .where('item.userId = :userId AND item.productId = :productId', {
+            userId,
+            productId,
+          })
+          .getMany();
+        if (lines.length > 1) {
+          throw new BadRequestException(
+            `This product has ${lines.length} options in your basket - say which one (variantId)`,
+          );
+        }
+        existing = lines[0] ?? null;
+      }
       if (!existing) {
         throw new NotFoundException("Product doesn't exist in basket");
       }

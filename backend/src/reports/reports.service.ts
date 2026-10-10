@@ -9,8 +9,48 @@ import {
 } from './dto/report-query.dto';
 import { CURRENCY_CODE } from '../common/constants/currency';
 import { queryRows } from '../common/database/raw-query';
+import {
+  SHOP_TIME_ZONE,
+  SHOP_UTC_OFFSET,
+  parseShopBoundary,
+  persianDayLabel,
+  persianMonthLabel,
+  persianMonthStart,
+  startOfShopDay,
+  startOfShopMonth,
+  toUtcSql,
+} from '../common/time/shop-time';
 
 const SOLD_STATUSES = ['paid', 'processing', 'sent', 'delivered'];
+
+// createdAt is filled in by MySQL, in the database server's own zone.
+// Days are cut on Tehran time: grouped by the server's clock, an order
+// placed at 1am in Tehran landed on the previous day whenever the host
+// ran on UTC.
+const ORDER_DAY_IN_TEHRAN = `DATE_FORMAT(CONVERT_TZ(o.createdAt, @@session.time_zone, '${SHOP_UTC_OFFSET}'), '%Y-%m-%d')`;
+// The range is compared in the column's own zone, so the index still
+// applies: the bounds are converted, not every row.
+const ORDER_IN_RANGE =
+  "o.createdAt BETWEEN CONVERT_TZ(:from, '+00:00', @@session.time_zone) " +
+  "AND CONVERT_TZ(:to, '+00:00', @@session.time_zone)";
+
+const SUM_FIELDS = [
+  'orders',
+  'gross',
+  'refunded',
+  'shipping',
+  'tax',
+  'discounts',
+] as const;
+type Sums = Record<(typeof SUM_FIELDS)[number], number>;
+const emptySums = (): Sums => ({
+  orders: 0,
+  gross: 0,
+  refunded: 0,
+  shipping: 0,
+  tax: 0,
+  discounts: 0,
+});
 
 @Injectable()
 export class ReportsService {
@@ -19,21 +59,26 @@ export class ReportsService {
     private readonly orders: Repository<Order>,
   ) {}
 
+  // A bare date is a whole Tehran day; with no `from`, the 30 days up to
+  // `to`, starting at a Tehran midnight.
   private range(query: SalesReportDto): { from: Date; to: Date } {
-    const to = query.to ? new Date(query.to) : new Date();
+    const to = query.to ? parseShopBoundary(query.to, 'end') : new Date();
     const from = query.from
-      ? new Date(query.from)
-      : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+      ? parseShopBoundary(query.from, 'start')
+      : startOfShopDay(new Date(to.getTime() - 29 * 24 * 60 * 60 * 1000));
     return { from, to };
   }
 
+  // Days are Tehran days; months are Persian months (Mehr, Aban, ...),
+  // rolled up from the days - MySQL has no Persian calendar. `period` is
+  // the first day of the bucket as YYYY-MM-DD, `label` how it reads.
   async sales(query: SalesReportDto) {
     const { from, to } = this.range(query);
-    const format = query.granularity === 'month' ? '%Y-%m' : '%Y-%m-%d';
+    const byMonth = query.granularity === 'month';
 
     const rows = await this.orders
       .createQueryBuilder('o')
-      .select(`DATE_FORMAT(o.createdAt, '${format}')`, 'period')
+      .select(ORDER_DAY_IN_TEHRAN, 'day')
       .addSelect('COUNT(*)', 'orders')
       .addSelect('COALESCE(SUM(o.total_price), 0)', 'gross')
       .addSelect('COALESCE(SUM(o.refunded_amount), 0)', 'refunded')
@@ -42,45 +87,42 @@ export class ReportsService {
       .addSelect('COALESCE(SUM(o.discount_amount), 0)', 'discounts')
       .where('o.status IN (:...statuses)', { statuses: SOLD_STATUSES })
       .andWhere('o.deletedAt IS NULL')
-      .andWhere('o.createdAt BETWEEN :from AND :to', { from, to })
-      .groupBy('period')
-      .orderBy('period', 'ASC')
+      .andWhere(ORDER_IN_RANGE, { from: toUtcSql(from), to: toUtcSql(to) })
+      .groupBy('day')
+      .orderBy('day', 'ASC')
       .getRawMany<Record<string, string>>();
 
-    const periods = rows.map((row) => ({
-      period: row.period,
-      orders: Number(row.orders),
-      gross: Number(row.gross),
-      refunded: Number(row.refunded),
-      net: Number(row.gross) - Number(row.refunded),
-      shipping: Number(row.shipping),
-      tax: Number(row.tax),
-      discounts: Number(row.discounts),
+    const buckets = new Map<string, Sums>();
+    for (const row of rows) {
+      const key = byMonth ? persianMonthStart(row.day) : row.day;
+      const sums = buckets.get(key) ?? emptySums();
+      for (const field of SUM_FIELDS) {
+        sums[field] += Number(row[field]);
+      }
+      buckets.set(key, sums);
+    }
+
+    const periods = [...buckets].map(([period, sums]) => ({
+      period,
+      label: byMonth ? persianMonthLabel(period) : persianDayLabel(period),
+      ...sums,
+      net: sums.gross - sums.refunded,
     }));
 
     const totals = periods.reduce(
-      (sum, period) => ({
-        orders: sum.orders + period.orders,
-        gross: sum.gross + period.gross,
-        refunded: sum.refunded + period.refunded,
-        net: sum.net + period.net,
-        shipping: sum.shipping + period.shipping,
-        tax: sum.tax + period.tax,
-        discounts: sum.discounts + period.discounts,
-      }),
-      {
-        orders: 0,
-        gross: 0,
-        refunded: 0,
-        net: 0,
-        shipping: 0,
-        tax: 0,
-        discounts: 0,
+      (sum, period) => {
+        for (const field of SUM_FIELDS) {
+          sum[field] += period[field];
+        }
+        sum.net += period.net;
+        return sum;
       },
+      { ...emptySums(), net: 0 },
     );
 
     return {
       currency: CURRENCY_CODE,
+      timeZone: SHOP_TIME_ZONE,
       from,
       to,
       granularity: query.granularity ?? 'day',
@@ -106,7 +148,7 @@ export class ReportsService {
       .addSelect('SUM(item.quantity * item.price)', 'revenue')
       .where('o.status IN (:...statuses)', { statuses: SOLD_STATUSES })
       .andWhere('o.deletedAt IS NULL')
-      .andWhere('o.createdAt BETWEEN :from AND :to', { from, to })
+      .andWhere(ORDER_IN_RANGE, { from: toUtcSql(from), to: toUtcSql(to) })
       .groupBy('product.id')
       .addGroupBy('product.title')
       .orderBy('quantity', 'DESC')
@@ -158,15 +200,17 @@ export class ReportsService {
     };
   }
 
+  // "Today" and "this month" as the shop sees them: since midnight in
+  // Tehran, and since the first of the Persian month. Taken from the
+  // server's clock they started at 3:30am on a UTC host, and the month
+  // was the Gregorian one.
   async summary() {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    const startOfMonth = new Date(startOfToday);
-    startOfMonth.setDate(1);
-
     const [today, month] = await Promise.all([
-      this.sales({ from: startOfToday.toISOString() }),
-      this.sales({ from: startOfMonth.toISOString(), granularity: 'month' }),
+      this.sales({ from: startOfShopDay().toISOString() }),
+      this.sales({
+        from: startOfShopMonth().toISOString(),
+        granularity: 'month',
+      }),
     ]);
 
     const counts = await this.orders

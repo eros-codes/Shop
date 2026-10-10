@@ -25,6 +25,8 @@ export interface DiscountLine {
   lineTotal: number;
 }
 import { AuditActor, AuditService } from '../audit/audit.service';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 @Injectable()
 export class DiscountCodesService {
@@ -200,14 +202,25 @@ export class DiscountCodesService {
       discountCode.products = withScope?.products ?? [];
       discountCode.categories = withScope?.categories ?? [];
     }
+    // Each rejection a shopper can meet carries the code both storefronts
+    // translate - as plain 400s they all read "invalid request".
     if (!discountCode) {
-      throw new BadRequestException('Discount code not found');
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_NOT_FOUND,
+        'Discount code not found',
+      );
     }
     if (discountCode.status !== DiscountStatusEnum.Active) {
-      throw new BadRequestException('Discount code is not active');
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_NOT_FOUND,
+        'Discount code is not active',
+      );
     }
     if (discountCode.capacity <= 0) {
-      throw new BadRequestException('Discount code has been fully used');
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_EXHAUSTED,
+        'Discount code has been fully used',
+      );
     }
     return discountCode;
   }
@@ -224,10 +237,16 @@ export class DiscountCodesService {
     const now = new Date();
 
     if (discount.starts_at && now < discount.starts_at) {
-      throw new BadRequestException('This discount code is not active yet');
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_NOT_STARTED,
+        'This discount code is not active yet',
+      );
     }
     if (discount.expires_at && now > discount.expires_at) {
-      throw new BadRequestException('This discount code has expired');
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_EXPIRED,
+        'This discount code has expired',
+      );
     }
 
     const orderTotal = params.lines.reduce(
@@ -235,8 +254,10 @@ export class DiscountCodesService {
       0,
     );
     if (discount.min_order_amount && orderTotal < discount.min_order_amount) {
-      throw new BadRequestException(
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_MIN_ORDER_NOT_MET,
         `This code needs an order of at least ${discount.min_order_amount.toLocaleString('en-US')} Toman`,
+        { minOrderAmount: discount.min_order_amount },
       );
     }
 
@@ -249,7 +270,8 @@ export class DiscountCodesService {
         },
       });
       if (used >= discount.per_user_limit) {
-        throw new BadRequestException(
+        throw AppError.badRequest(
+          ErrorCodes.DISCOUNT_USER_LIMIT_REACHED,
           'You have already used this discount code as many times as it allows',
         );
       }
@@ -257,7 +279,8 @@ export class DiscountCodesService {
 
     const amount = this.computeAmount(discount, params.lines);
     if (amount <= 0) {
-      throw new BadRequestException(
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_NOT_APPLICABLE,
         'This code does not apply to anything in your basket',
       );
     }
@@ -315,7 +338,8 @@ export class DiscountCodesService {
       .execute();
 
     if (!result.affected) {
-      throw new BadRequestException(
+      throw AppError.badRequest(
+        ErrorCodes.DISCOUNT_EXHAUSTED,
         'This discount code is no longer available',
       );
     }

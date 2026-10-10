@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { RateLimit } from './common/throttler/rate-limit.entity';
 import { DatabaseThrottlerStorage } from './common/throttler/database-throttler.storage';
+import { phoneThrottler } from './common/throttler/phone-throttle';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CacheModule } from '@nestjs/cache-manager';
 import { LoggerModule } from 'nestjs-pino';
@@ -52,6 +53,8 @@ import { ReturnsAndAudit1790500000000 } from './migrations/1790500000000-Returns
 import { RichDiscountCodes1790600000000 } from './migrations/1790600000000-RichDiscountCodes';
 import { ProductAttributes1790700000000 } from './migrations/1790700000000-ProductAttributes';
 import { AccountsBestSellersRelated1790800000000 } from './migrations/1790800000000-AccountsBestSellersRelated';
+import { TokensValidAfter1790900000000 } from './migrations/1790900000000-TokensValidAfter';
+import { RetireVariantsOfDeletedProducts1791000000000 } from './migrations/1791000000000-RetireVariantsOfDeletedProducts';
 
 @Module({
   imports: [
@@ -87,6 +90,7 @@ import { AccountsBestSellersRelated1790800000000 } from './migrations/1790800000
         SENTRY_DSN: Joi.string().optional().allow(''),
         SMSIR_API_KEY: Joi.string().optional().allow(''),
         SMSIR_OTP_TEMPLATE_ID: Joi.string().optional().allow(''),
+        SMSIR_ACCOUNT_EXISTS_TEMPLATE_ID: Joi.string().optional().allow(''),
         ZARINPAL_MERCHANT_ID: Joi.when('NODE_ENV', {
           is: 'production',
           then: Joi.string().min(36).required().messages({
@@ -151,6 +155,7 @@ import { AccountsBestSellersRelated1790800000000 } from './migrations/1790800000
         THROTTLE_STORAGE: Joi.string()
           .valid('memory', 'database')
           .default('memory'),
+        THROTTLE_LIMIT_PER_MINUTE: Joi.number().integer().min(1).default(600),
         SWAGGER_ENABLED: Joi.when('NODE_ENV', {
           is: 'production',
           then: Joi.boolean().truthy('true').falsy('false').default(false),
@@ -172,7 +177,15 @@ import { AccountsBestSellersRelated1790800000000 } from './migrations/1790800000
           process.env.NODE_ENV !== 'production'
             ? { target: 'pino-pretty', options: { singleLine: true } }
             : undefined,
-        redact: ['req.headers.authorization'],
+        // The refresh token rides in a cookie both ways: the browser sends
+        // it back in `cookie` and login/refresh hand out a new one in
+        // `set-cookie`. Logged as-is, every request line carried a 30-day
+        // session anyone with read access to the logs could replay.
+        redact: [
+          'req.headers.authorization',
+          'req.headers.cookie',
+          'res.headers["set-cookie"]',
+        ],
         autoLogging: true,
       },
     }),
@@ -180,7 +193,17 @@ import { AccountsBestSellersRelated1790800000000 } from './migrations/1790800000
       imports: [TypeOrmModule.forFeature([RateLimit])],
       inject: [ConfigService, DataSource],
       useFactory: (configService: ConfigService, dataSource: DataSource) => ({
-        throttlers: [{ name: 'default', ttl: 60000, limit: 100 }],
+        // The site-wide cap is per IP and deliberately loose (see
+        // phone-throttle.ts); the tight limits live on the routes that
+        // need them.
+        throttlers: [
+          {
+            name: 'default',
+            ttl: 60_000,
+            limit: configService.get<number>('THROTTLE_LIMIT_PER_MINUTE', 600),
+          },
+          phoneThrottler,
+        ],
         ...(configService.get<string>('THROTTLE_STORAGE') === 'database'
           ? { storage: new DatabaseThrottlerStorage(dataSource) }
           : {}),
@@ -217,6 +240,8 @@ import { AccountsBestSellersRelated1790800000000 } from './migrations/1790800000
         RichDiscountCodes1790600000000,
         ProductAttributes1790700000000,
         AccountsBestSellersRelated1790800000000,
+        TokensValidAfter1790900000000,
+        RetireVariantsOfDeletedProducts1791000000000,
       ],
       migrationsRun: process.env.NODE_ENV !== 'production',
       extra: {

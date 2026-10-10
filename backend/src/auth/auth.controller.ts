@@ -13,6 +13,7 @@ import {
 import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
+import { PhoneThrottle } from '../common/throttler/phone-throttle';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import {
   CurrentUser,
@@ -34,6 +35,8 @@ import {
 } from './utils/refresh-token-cookie';
 import { ApiTags } from '@nestjs/swagger';
 
+const MINUTE = 60_000;
+
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
@@ -42,17 +45,26 @@ export class AuthController {
     private readonly configService: ConfigService,
   ) {}
 
-  @Throttle({ default: { limit: 5, ttl: 600000 } })
+  // Per number: the real limit. Per IP: only a ceiling on one address
+  // sending codes to a list of numbers - generous, because a whole
+  // carrier can sit behind one address.
+  @PhoneThrottle(
+    { limit: 5, ttl: 10 * MINUTE },
+    { limit: 30, ttl: 10 * MINUTE },
+  )
   @Post('register')
   async register(@Body() registerDto: RegisterDto) {
     const result = await this.authService.register(registerDto);
     return {
       data: result,
-      message: 'Verification code sent. Check the server console for now.',
+      message: 'Verification code sent',
     };
   }
 
-  @Throttle({ default: { limit: 10, ttl: 600000 } })
+  @PhoneThrottle(
+    { limit: 10, ttl: 10 * MINUTE },
+    { limit: 60, ttl: 10 * MINUTE },
+  )
   @Post('verify-otp')
   async verifyOtp(
     @Body() verifyOtpDto: VerifyOtpDto,
@@ -67,7 +79,7 @@ export class AuthController {
     };
   }
 
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @PhoneThrottle({ limit: 10, ttl: 10 * MINUTE }, { limit: 30, ttl: MINUTE })
   @HttpCode(HttpStatus.OK)
   @Post('login')
   async login(
@@ -103,7 +115,10 @@ export class AuthController {
   // "I forgot my password": a code goes to the number. The answer is the
   // same whether or not an account exists, so this cannot be used to
   // find out which numbers are registered.
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @PhoneThrottle(
+    { limit: 5, ttl: 10 * MINUTE },
+    { limit: 30, ttl: 10 * MINUTE },
+  )
   @Post('forgot-password')
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     const result = await this.authService.forgotPassword(dto.mobile);
@@ -113,7 +128,10 @@ export class AuthController {
     };
   }
 
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @PhoneThrottle(
+    { limit: 10, ttl: 10 * MINUTE },
+    { limit: 60, ttl: 10 * MINUTE },
+  )
   @Post('reset-password')
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto);
@@ -121,7 +139,9 @@ export class AuthController {
   }
 
   // Changing it while signed in: the current password is required, and
-  // every session is signed out afterwards.
+  // every session is signed out afterwards. Throttled because a stolen
+  // access token could otherwise be used to guess the current password.
+  @Throttle({ default: { limit: 10, ttl: MINUTE } })
   @UseGuards(JwtAuthGuard)
   @Patch('password')
   async changePassword(

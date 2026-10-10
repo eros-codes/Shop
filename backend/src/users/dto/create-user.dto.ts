@@ -1,4 +1,3 @@
-import { Transform } from 'class-transformer';
 import {
   IsEnum,
   IsNotEmpty,
@@ -9,6 +8,8 @@ import {
   MinLength,
 } from 'class-validator';
 import userRoleEnum from '../enums/userRoleEnum';
+import { NormalizeDigits } from '../../common/validation/normalize';
+import { PASSWORD_MAX_LENGTH } from '../../common/constants/limits';
 
 export class CreateUserDto {
   @IsNotEmpty({ message: "Mobile number can't be empty" })
@@ -16,9 +17,7 @@ export class CreateUserDto {
   @Matches(/^09\d{9}$/, {
     message: 'Mobile number must be a valid Iranian phone number.',
   })
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @NormalizeDigits()
   mobile!: string;
 
   @IsString({ message: 'Name should be a string' })
@@ -31,7 +30,9 @@ export class CreateUserDto {
   @IsNotEmpty({ message: "Password can't be empty" })
   @IsString({ message: 'Password should be a string' })
   @MinLength(8, { message: 'Password must be at least 8 characters' })
-  @MaxLength(64, { message: 'Password must be shorter than 64 characters' })
+  @MaxLength(PASSWORD_MAX_LENGTH, {
+    message: `Password must be at most ${PASSWORD_MAX_LENGTH} characters`,
+  })
   @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
     message: 'Password must contain at least one letter and one number',
   })

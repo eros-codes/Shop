@@ -290,9 +290,9 @@ describe('WalletsService', () => {
         is_active: false,
       });
 
-      await expect(service.withdraw(1, { amount: 100 })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.withdraw(1, { amount: 100 })).rejects.toMatchObject({
+        code: ErrorCodes.WALLET_INACTIVE,
+      });
     });
 
     it('refuses an admin top-up', async () => {
@@ -302,9 +302,11 @@ describe('WalletsService', () => {
         is_active: false,
       });
 
-      await expect(service.adminCharge(1, { amount: 100 })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.adminCharge(1, { amount: 100 }),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.WALLET_INACTIVE,
+      });
     });
   });
 

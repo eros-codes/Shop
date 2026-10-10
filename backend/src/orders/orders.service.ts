@@ -3,8 +3,8 @@ import {
   ConflictException,
   Injectable,
   Logger,
+  HttpStatus,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
@@ -81,6 +81,8 @@ const ALLOWED_STATUS_TRANSITIONS: Record<OrderStatusEnum, OrderStatusEnum[]> = {
   [OrderStatusEnum.Delivered]: [],
   [OrderStatusEnum.Cancelled]: [],
 };
+
+const CUSTOMER_CANCELLABLE = [OrderStatusEnum.Pending];
 
 const CANCELLABLE_WITH_STOCK_RESTORE = [
   OrderStatusEnum.Pending,
@@ -389,6 +391,7 @@ export class OrdersService {
         if (products.length !== new Set(productIds).size) {
           throw new BadRequestException('One or more product IDs are invalid');
         }
+        this.assertAllForSale(products);
 
         // Stock and price live on the variant. A product with a single option
         // needs no choice from the client; one with several refuses to guess.
@@ -552,14 +555,16 @@ export class OrdersService {
         // local copy is not enough: a signed-in customer's basket lives on
         // the server, so without this the items reappear on the next reload
         // and can be bought twice.
+        // By the variant that was actually sold, not the id the client sent:
+        // a single-option product is bought without one, but its basket
+        // line does carry it.
         const basketRepo = manager.getRepository(BasketItem);
-        for (const item of createOrderDto.items) {
-          const where: Record<string, unknown> = {
+        for (const { product, variant } of resolved) {
+          await basketRepo.delete({
             user: { id: userId },
-            product: { id: item.productId },
-          };
-          where.variant = item.variantId ? { id: item.variantId } : IsNull();
-          await basketRepo.delete(where);
+            product: { id: product.id },
+            variant: { id: variant.id },
+          });
         }
 
         return savedOrder.id;
@@ -623,8 +628,10 @@ export class OrdersService {
         orderId,
         'the payment session could not be opened',
       );
-      throw new ServiceUnavailableException(
+      throw new AppError(
+        ErrorCodes.PAYMENT_GATEWAY_UNAVAILABLE,
         'Could not start the payment. Nothing was charged, the order was cancelled - please try again.',
+        HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
   }
@@ -773,12 +780,14 @@ export class OrdersService {
         const order = await this.loadOrderForWrite(ordersRepo, id);
 
         if (order.status !== OrderStatusEnum.Pending) {
-          throw new BadRequestException(
+          throw AppError.badRequest(
+            ErrorCodes.ORDER_NOT_EDITABLE,
             `Cannot modify an order once it is ${order.status} - only pending orders can be edited`,
           );
         }
         if (order.zarinpalAuthority) {
-          throw new BadRequestException(
+          throw AppError.badRequest(
+            ErrorCodes.ORDER_NOT_EDITABLE,
             'This order already has an open payment session and can no longer be edited - cancel it (or let it expire) and place a new order',
           );
         }
@@ -827,6 +836,18 @@ export class OrdersService {
             lock: { mode: 'pessimistic_write' },
           });
           const releasedLines = toStockLines(previousItems);
+          // Lines already on the order stay as they are; anything new has to
+          // be on sale today.
+          const alreadyOrdered = new Set(
+            previousItems.map((item) => item.product?.id),
+          );
+          this.assertAllForSale(
+            lockedProducts.filter(
+              (product) =>
+                !alreadyOrdered.has(product.id) &&
+                items.some((item) => item.productId === product.id),
+            ),
+          );
           const resolved = await this.resolveVariants(
             manager,
             items,
@@ -980,14 +1001,27 @@ export class OrdersService {
     }
   }
 
+  // A customer calling off their own order. It is a cancellation, not a
+  // delete: the order keeps its invoice number and stays in the panel. Only
+  // an order nobody has acted on yet qualifies - a cash-on-delivery order
+  // still waiting for the shop. The status is checked under the row lock,
+  // so an admin moving it on at the same moment wins cleanly.
+  async cancelByCustomer(id: number, actor: AuditActor): Promise<Order> {
+    return this.updateStatus(id, { status: OrderStatusEnum.Cancelled }, actor, {
+      onlyFrom: CUSTOMER_CANCELLABLE,
+    });
+  }
+
   async updateStatus(
     id: number,
     updateOrderStatusDto: UpdateOrderStatusDto,
     actor?: AuditActor,
+    options: { onlyFrom?: OrderStatusEnum[] } = {},
   ): Promise<Order> {
     const { status: newStatus, tracking_code } = updateOrderStatusDto;
 
     let previousStatus: OrderStatusEnum | null = null;
+    let sameStatus = false;
     let refunded = 0;
     const { savedOrderId, restoredProductIds } =
       await this.dataSource.transaction(async (manager) => {
@@ -997,11 +1031,34 @@ export class OrdersService {
         const order = await this.loadOrderForWrite(ordersRepo, id);
 
         previousStatus = order.status;
+        if (
+          options.onlyFrom &&
+          order.status !== newStatus &&
+          !options.onlyFrom.includes(order.status)
+        ) {
+          throw AppError.badRequest(
+            ErrorCodes.ORDER_NOT_CANCELLABLE,
+            `An order that is ${order.status} can no longer be cancelled - contact support`,
+          );
+        }
         const allowedNext = ALLOWED_STATUS_TRANSITIONS[order.status] ?? [];
         if (order.status !== newStatus && !allowedNext.includes(newStatus)) {
-          throw new BadRequestException(
+          throw AppError.badRequest(
+            ErrorCodes.INVALID_STATUS_TRANSITION,
             `Cannot move an order from ${order.status} to ${newStatus}`,
           );
+        }
+
+        // Re-sending the current status is how the panel corrects a
+        // tracking code - and that is all it may do. Running the status's
+        // side effects again counted the sale a second time (sales_count
+        // drives "best selling") and asked for another invoice number.
+        if (order.status === newStatus) {
+          sameStatus = true;
+          if (tracking_code !== undefined) {
+            await ordersRepo.update({ id: order.id }, { tracking_code });
+          }
+          return { savedOrderId: order.id, restoredProductIds: [] };
         }
 
         let restored: number[] = [];
@@ -1080,6 +1137,9 @@ export class OrdersService {
     });
 
     const order = await this.findOne(savedOrderId);
+    if (sameStatus) {
+      return order;
+    }
     const event =
       newStatus === OrderStatusEnum.Paid
         ? NotificationEventEnum.OrderPaid
@@ -1171,7 +1231,12 @@ export class OrdersService {
       if (!locked) {
         throw new NotFoundException(`Order with id ${orderId} not found`);
       }
-      if (locked.status === OrderStatusEnum.Paid) {
+      // Every status from `paid` onwards means this payment was already
+      // settled. A customer can reopen the callback URL at any time and
+      // ZarinPal verifies a repeat with 101, so an order the shop has since
+      // moved to processing/sent/delivered must not be read as "paid after
+      // it closed" - that branch refunded the whole amount to the wallet.
+      if (SOLD_STATUSES.includes(locked.status)) {
         return 'already_paid';
       }
 
@@ -1227,6 +1292,19 @@ export class OrdersService {
       });
       return 'refunded';
     });
+  }
+
+  // A product the shop has unpublished is hidden from the catalogue, so it
+  // must not be orderable by id either.
+  private assertAllForSale(products: Product[]): void {
+    const hidden = products.find((product) => !product.is_published);
+    if (hidden) {
+      throw AppError.badRequest(
+        ErrorCodes.VARIANT_NOT_FOR_SALE,
+        `${hidden.title} is not for sale`,
+        { productId: hidden.id },
+      );
+    }
   }
 
   async findByAuthority(authority: string): Promise<Order | null> {

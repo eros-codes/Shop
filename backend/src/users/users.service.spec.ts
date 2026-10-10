@@ -10,6 +10,7 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import userRoleEnum from './enums/userRoleEnum';
 import { Product } from '../products/entities/product.entity';
 import { ProductVariant } from '../products/entities/product-variant.entity';
+import { ErrorCodes } from '../common/errors/error-codes';
 import { AuditService } from '../audit/audit.service';
 
 const mockUserRepository = () => ({
@@ -50,6 +51,7 @@ describe('UsersService', () => {
     for (const method of ['select', 'where'])
       basketQb[method] = jest.fn(() => basketQb);
     basketQb.getOne = jest.fn().mockResolvedValue(null);
+    basketQb.getMany = jest.fn().mockResolvedValue([]);
     basketQb.getCount = jest.fn().mockResolvedValue(0);
     basketLines = {
       createQueryBuilder: jest.fn(() => basketQb),
@@ -77,7 +79,9 @@ describe('UsersService', () => {
     };
     manager = {
       findOne: jest.fn(async (entity) =>
-        entity === Product ? { id: 3, title: 'Test', stock: 5 } : { id: 7 },
+        entity === Product
+          ? { id: 3, title: 'Test', stock: 5, is_published: true }
+          : { id: 7 },
       ),
       getRepository: jest.fn((entity) =>
         entity === ProductVariant ? variantRepo : basketLines,
@@ -321,6 +325,19 @@ describe('UsersService', () => {
       expect(basketLines.insert).not.toHaveBeenCalled();
     });
 
+    it('refuses a product the shop has unpublished', async () => {
+      manager.findOne.mockImplementation(async (entity) =>
+        entity === Product
+          ? { id: 3, title: 'Draft', stock: 5, is_published: false }
+          : { id: 7 },
+      );
+
+      await expect(service.addProductToBasket(7, 3)).rejects.toMatchObject({
+        code: ErrorCodes.VARIANT_NOT_FOR_SALE,
+      });
+      expect(basketLines.insert).not.toHaveBeenCalled();
+    });
+
     it('caps the number of different products in a basket', async () => {
       basketQb.getCount.mockResolvedValue(100);
 
@@ -331,14 +348,14 @@ describe('UsersService', () => {
     });
 
     it('decrements, then deletes the last unit', async () => {
-      basketQb.getOne.mockResolvedValueOnce({ id: 11, quantity: 2 });
+      basketQb.getMany.mockResolvedValueOnce([{ id: 11, quantity: 2 }]);
       await service.removeProductFromBasket(7, 3);
       expect(basketLines.update).toHaveBeenCalledWith(
         { id: 11 },
         { quantity: 1 },
       );
 
-      basketQb.getOne.mockResolvedValueOnce({ id: 11, quantity: 1 });
+      basketQb.getMany.mockResolvedValueOnce([{ id: 11, quantity: 1 }]);
       await service.removeProductFromBasket(7, 3);
       expect(basketLines.delete).toHaveBeenCalledWith({ id: 11 });
     });
@@ -346,6 +363,28 @@ describe('UsersService', () => {
     it('is a 404 when the product is not in the basket', async () => {
       await expect(service.removeProductFromBasket(7, 3)).rejects.toThrow(
         NotFoundException,
+      );
+    });
+
+    // The shop switched the option off after it went into the basket. The
+    // line still has to come out - checkout refuses it.
+    it('removes a line whose option is no longer for sale', async () => {
+      basketQb.getOne.mockResolvedValueOnce({ id: 11, quantity: 1 });
+
+      await service.removeProductFromBasket(7, 3, 21);
+
+      expect(basketLines.delete).toHaveBeenCalledWith({ id: 11 });
+      expect(variantRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('asks which option when the product has several lines', async () => {
+      basketQb.getMany.mockResolvedValueOnce([
+        { id: 11, quantity: 1 },
+        { id: 12, quantity: 1 },
+      ]);
+
+      await expect(service.removeProductFromBasket(7, 3)).rejects.toThrow(
+        BadRequestException,
       );
     });
   });

@@ -16,7 +16,7 @@ import {
   SelectQueryBuilder,
 } from 'typeorm';
 import { CreateProductDto } from './dto/create-product.dto';
-import { slugify } from '../common/utils/slugify';
+import { slugify, uniqueSlug } from '../common/utils/slugify';
 import { isDuplicateEntryError } from '../common/database/mysql-errors';
 import { AuditActor, AuditService } from '../audit/audit.service';
 import {
@@ -50,8 +50,12 @@ import {
   CatalogCacheScope,
   CatalogCacheService,
 } from '../common/cache/catalog-cache.service';
-import { buildProductSearchPlan } from './utils/product-search';
-import { lockActiveProduct } from './utils/product-locks';
+import {
+  buildProductSearchPlan,
+  escapeLikePattern,
+} from './utils/product-search';
+import { assertPublished, lockActiveProduct } from './utils/product-locks';
+import { softDeleteProducts } from './utils/product-delete';
 import { lockUserRow } from '../users/utils/lock-user-row';
 import { ValidatedImage } from './pipes/product-images.pipe';
 import { AppError } from '../common/errors/app-error';
@@ -67,6 +71,20 @@ export interface ProductFacetOption {
   slug: string;
   hex: string | null;
   count: number;
+}
+
+export interface ProductViewOptions {
+  // Unpublished products are the admin's work in progress. Only the admin
+  // panel asks for them, and the controller only lets it when the caller
+  // really is an admin.
+  includeDrafts?: boolean;
+}
+
+// What the facet counts would otherwise look up once per option: the
+// category subtree and which attribute each option belongs to.
+interface FilterContext {
+  categoryIds?: number[];
+  optionMeta?: Map<number, { attributeId: number; isAxis: boolean }>;
 }
 
 export interface ProductFacet {
@@ -113,19 +131,24 @@ export class ProductsService {
       is_published,
     } = createProductDto;
 
-    const productSlug = slugify(slug ?? title);
-    if (!productSlug) {
+    const baseSlug = slugify(slug ?? title);
+    if (!baseSlug) {
       throw new BadRequestException(
         'This title cannot be turned into a URL slug - please provide one explicitly',
       );
     }
+    // Two products with the same title are normal ("Galaxy S25" from two
+    // sellers); the second one used to die on the unique index with a 500.
+    // A slug the admin typed is theirs to fix, so that one still conflicts.
+    const productSlug =
+      slug === undefined ? await this.freeSlug(baseSlug) : baseSlug;
     if (sale_price !== undefined && sale_price !== null && sale_price > price) {
       throw new BadRequestException(
         'A sale price above the normal price is not a sale',
       );
     }
 
-    const productId = await this.dataSource.transaction(async (manager) => {
+    const productId = await this.inSlugTransaction(async (manager) => {
       const product = manager.create(Product, {
         title,
         description,
@@ -209,24 +232,52 @@ export class ProductsService {
     });
 
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
-    return this.findOne(productId);
+    return this.findOne(productId, { includeDrafts: true });
   }
 
-  async findAll(query: FilterProductDto): Promise<PaginatedResult<Product>> {
-    const {
-      categoryId,
-      brandId,
-      minPrice,
-      maxPrice,
-      inStock,
-      onSale,
-      attributeOptions,
-      search,
-      sortBy,
-      sortOrder,
-      page,
-      limit,
-    } = query;
+  // The first free "base", "base-2", "base-3"... among live products.
+  private async freeSlug(base: string): Promise<string> {
+    const rows = await this.productsRepository
+      .createQueryBuilder('product')
+      .select('product.slug', 'slug')
+      .where('product.slug LIKE :prefix', {
+        prefix: `${escapeLikePattern(base)}%`,
+      })
+      .getRawMany<{ slug: string }>();
+    return uniqueSlug(
+      base,
+      rows.map((row) => row.slug),
+    );
+  }
+
+  // A clash on the unique slug or SKU index is the admin's input colliding
+  // with an existing product - a 409 with the field named, not a 500.
+  private async inSlugTransaction<T>(
+    work: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await this.dataSource.transaction(work);
+    } catch (error) {
+      if (isDuplicateEntryError(error)) {
+        const detail = String(
+          (error as { driverError?: { sqlMessage?: string } }).driverError
+            ?.sqlMessage ?? '',
+        );
+        throw new ConflictException(
+          /sku/i.test(detail)
+            ? 'One of these SKUs is already used by another product'
+            : 'Another product already uses this slug - choose a different one',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async findAll(
+    query: FilterProductDto,
+    options: ProductViewOptions = {},
+  ): Promise<PaginatedResult<Product>> {
+    const { sortBy, sortOrder, page, limit } = query;
     const direction = sortOrder ?? 'DESC';
     const effectivePrice = ProductsService.EFFECTIVE_PRICE_SQL;
 
@@ -251,7 +302,7 @@ export class ProductsService {
       ])
       .leftJoin('product.brand', 'brand')
       .addSelect(['brand.id', 'brand.title', 'brand.slug'])
-      .where('product.is_published = TRUE')
+      .where(options.includeDrafts ? '1 = 1' : 'product.is_published = TRUE')
       .leftJoinAndMapOne(
         'product.coverImage',
         'product.images',
@@ -260,51 +311,8 @@ export class ProductsService {
       )
       .addSelect(['cover.id', 'cover.url', 'cover.order']);
 
-    if (categoryId) {
-      const categoryIds =
-        await this.categoriesService.getDescendantIds(categoryId);
-      qb.andWhere(
-        'EXISTS (SELECT 1 FROM product_category pc INNER JOIN categories c ON c.id = pc.category_id AND c.deleted_at IS NULL WHERE pc.product_id = product.id AND pc.category_id IN (:...categoryIds))',
-        { categoryIds },
-      );
-    }
-
-    if (brandId) {
-      qb.andWhere('product.brand_id = :brandId', { brandId });
-    }
-
-    if (minPrice !== undefined) {
-      qb.andWhere(`${effectivePrice} >= :minPrice`, { minPrice });
-    }
-    if (maxPrice !== undefined) {
-      qb.andWhere(`${effectivePrice} <= :maxPrice`, { maxPrice });
-    }
-    if (attributeOptions?.length) {
-      await this.applyAttributeFilter(qb, attributeOptions, inStock === 'true');
-    }
-    if (inStock === 'true') {
-      qb.andWhere('product.stock > 0');
-    }
-    if (onSale === 'true') {
-      qb.andWhere(`${effectivePrice} < product.price`);
-    }
-
-    if (search) {
-      const plan = buildProductSearchPlan(search);
-      if (!plan) {
-        return { items: [], total: 0, page, limit, totalPages: 0 };
-      }
-      if (plan.fullTextQuery) {
-        qb.andWhere(
-          'MATCH(product.title) AGAINST (:fullTextQuery IN BOOLEAN MODE)',
-          { fullTextQuery: plan.fullTextQuery },
-        );
-      }
-      plan.likePatterns.forEach((pattern, index) => {
-        qb.andWhere(`product.title LIKE :titlePattern${index}`, {
-          [`titlePattern${index}`]: pattern,
-        });
-      });
+    if (!(await this.applyFilters(qb, query))) {
+      return { items: [], total: 0, page, limit, totalPages: 0 };
     }
 
     const orderExpression =
@@ -329,7 +337,85 @@ export class ProductsService {
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
-  async findOne(id: number): Promise<Product> {
+  // Every filter the listing understands, shared by the listing itself and
+  // by the facet counts. Returns false when the search has nothing usable
+  // in it, i.e. nothing can match.
+  private async applyFilters(
+    qb: SelectQueryBuilder<Product>,
+    query: FilterProductDto,
+    context: FilterContext = {},
+  ): Promise<boolean> {
+    const {
+      categoryId,
+      brandId,
+      minPrice,
+      maxPrice,
+      inStock,
+      onSale,
+      attributeOptions,
+      search,
+    } = query;
+    const effectivePrice = ProductsService.EFFECTIVE_PRICE_SQL;
+
+    if (categoryId) {
+      const categoryIds =
+        context.categoryIds ??
+        (await this.categoriesService.getDescendantIds(categoryId));
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM product_category pc INNER JOIN categories c ON c.id = pc.category_id AND c.deleted_at IS NULL WHERE pc.product_id = product.id AND pc.category_id IN (:...categoryIds))',
+        { categoryIds },
+      );
+    }
+
+    if (brandId) {
+      qb.andWhere('product.brand_id = :brandId', { brandId });
+    }
+
+    if (minPrice !== undefined) {
+      qb.andWhere(`${effectivePrice} >= :minPrice`, { minPrice });
+    }
+    if (maxPrice !== undefined) {
+      qb.andWhere(`${effectivePrice} <= :maxPrice`, { maxPrice });
+    }
+    if (attributeOptions?.length) {
+      await this.applyAttributeFilter(
+        qb,
+        attributeOptions,
+        inStock === 'true',
+        context.optionMeta,
+      );
+    }
+    if (inStock === 'true') {
+      qb.andWhere('product.stock > 0');
+    }
+    if (onSale === 'true') {
+      qb.andWhere(`${effectivePrice} < product.price`);
+    }
+
+    if (search) {
+      const plan = buildProductSearchPlan(search);
+      if (!plan) {
+        return false;
+      }
+      if (plan.fullTextQuery) {
+        qb.andWhere(
+          'MATCH(product.title) AGAINST (:fullTextQuery IN BOOLEAN MODE)',
+          { fullTextQuery: plan.fullTextQuery },
+        );
+      }
+      plan.likePatterns.forEach((pattern, index) => {
+        qb.andWhere(`product.title LIKE :titlePattern${index}`, {
+          [`titlePattern${index}`]: pattern,
+        });
+      });
+    }
+    return true;
+  }
+
+  async findOne(
+    id: number,
+    options: ProductViewOptions = {},
+  ): Promise<Product> {
     const product = await this.productsRepository.findOne({
       where: { id },
       relations: {
@@ -343,12 +429,17 @@ export class ProductsService {
       },
       order: { images: { order: 'ASC' } },
     });
-    if (!product)
+    // A draft answers exactly like a product that does not exist: its id,
+    // price and description are the shop's unreleased work.
+    if (!product || (!product.is_published && !options.includeDrafts))
       throw new NotFoundException(`Product with ID ${id} not found`);
     return product;
   }
 
-  async findBySlug(slug: string): Promise<Product> {
+  async findBySlug(
+    slug: string,
+    options: ProductViewOptions = {},
+  ): Promise<Product> {
     const product = await this.productsRepository.findOne({
       where: { slug },
       relations: {
@@ -362,7 +453,7 @@ export class ProductsService {
       },
       order: { images: { order: 'ASC' } },
     });
-    if (!product) {
+    if (!product || (!product.is_published && !options.includeDrafts)) {
       throw new NotFoundException(`Product "${slug}" not found`);
     }
     return product;
@@ -386,6 +477,7 @@ export class ProductsService {
       sale_ends_at,
       weight_grams,
       is_published,
+      attributes,
     } = updateProductDto;
     const changes: Record<string, unknown> = {};
     if (title !== undefined) changes.title = title;
@@ -411,12 +503,22 @@ export class ProductsService {
       changes.brand = brandId === null ? null : { id: brandId };
     }
 
-    await this.dataSource.transaction(async (manager) => {
+    await this.inSlugTransaction(async (manager) => {
       const categories =
         categoryIds !== undefined
           ? await this.lockActiveCategories(manager, categoryIds)
           : undefined;
-      await lockActiveProduct(manager, id, 'pessimistic_write');
+      const current = await lockActiveProduct(manager, id, 'pessimistic_write');
+
+      // Same rule create enforces, against the price this edit leaves.
+      const nextPrice = price ?? Number(current.price);
+      const nextSale =
+        sale_price !== undefined ? sale_price : current.sale_price;
+      if (nextSale !== null && nextSale !== undefined && nextSale > nextPrice) {
+        throw new BadRequestException(
+          'A sale price above the normal price is not a sale',
+        );
+      }
 
       if (stock !== undefined) {
         const liveVariants = await manager.getRepository(ProductVariant).find({
@@ -452,6 +554,16 @@ export class ProductsService {
           [...existing].filter((categoryId) => !wanted.has(categoryId)),
         );
       }
+
+      // The descriptive properties (screen size, fabric...). The panel sends
+      // them on every save; they used to be dropped here without a word.
+      if (attributes !== undefined) {
+        await this.attributesService.replaceProductValues(
+          manager,
+          id,
+          attributes,
+        );
+      }
     });
 
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
@@ -474,19 +586,13 @@ export class ProductsService {
       });
     }
 
-    return this.findOne(id);
+    return this.findOne(id, { includeDrafts: true });
   }
 
   async remove(id: number): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
       await lockActiveProduct(manager, id, 'pessimistic_write');
-      await manager.softDelete(Product, { id });
-      await manager
-        .createQueryBuilder()
-        .delete()
-        .from(BasketItem)
-        .where('productId = :id', { id })
-        .execute();
+      await softDeleteProducts(manager, [id]);
     });
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
   }
@@ -535,7 +641,7 @@ export class ProductsService {
     }
 
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
-    return this.findOne(productId);
+    return this.findOne(productId, { includeDrafts: true });
   }
 
   async removeImage(productId: number, imageId: number): Promise<Product> {
@@ -569,7 +675,7 @@ export class ProductsService {
 
     await this.fileStorage.delete(`${PRODUCT_IMAGES_FOLDER}/${filename}`);
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
-    return this.findOne(productId);
+    return this.findOne(productId, { includeDrafts: true });
   }
 
   // Bookmarks used to be write-only: rows went in and nothing ever read
@@ -578,6 +684,13 @@ export class ProductsService {
     const rows = await this.dataSource
       .createQueryBuilder(BookmarkProduct, 'bookmark')
       .select('bookmark.product_id', 'productId')
+      // Deleted or unpublished products drop out of the list; their ids
+      // only produced a row of failed lookups on the favourites page.
+      .innerJoin(
+        Product,
+        'product',
+        'product.id = bookmark.product_id AND product.deleted_at IS NULL AND product.is_published = TRUE',
+      )
       .where('bookmark.user_id = :userId', { userId })
       .orderBy('bookmark.id', 'DESC')
       .getRawMany<{ productId: number }>();
@@ -587,11 +700,15 @@ export class ProductsService {
   async toggleBookmark(
     userId: number,
     createBookmarkDto: CreateBookmarkDto,
-  ): Promise<{ bookmarked: boolean; product: Product }> {
+  ): Promise<{ bookmarked: boolean; product: Product | null }> {
     const productId = createBookmarkDto.product_id;
 
     const bookmarked = await this.dataSource.transaction(async (manager) => {
-      await lockActiveProduct(manager, productId, 'pessimistic_read');
+      const product = await lockActiveProduct(
+        manager,
+        productId,
+        'pessimistic_read',
+      );
       await lockUserRow(manager, userId);
 
       const existing = await manager
@@ -610,6 +727,8 @@ export class ProductsService {
         await manager.delete(BookmarkProduct, { id: existing.id });
         return false;
       }
+      // Taking one off is always allowed; a draft cannot be added.
+      assertPublished(product);
       await manager.insert(BookmarkProduct, {
         user: { id: userId },
         product: { id: productId },
@@ -617,7 +736,10 @@ export class ProductsService {
       return true;
     });
 
-    return { bookmarked, product: await this.findOne(productId) };
+    return {
+      bookmarked,
+      product: await this.findOne(productId).catch(() => null),
+    };
   }
 
   mergeBasket(userId: number, dto: MergeBasketDto) {
@@ -727,7 +849,7 @@ export class ProductsService {
     });
 
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
-    return this.findOne(productId);
+    return this.findOne(productId, { includeDrafts: true });
   }
 
   async updateVariant(
@@ -834,7 +956,7 @@ export class ProductsService {
     });
 
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
-    return this.findOne(productId);
+    return this.findOne(productId, { includeDrafts: true });
   }
 
   async removeVariant(productId: number, variantId: number): Promise<Product> {
@@ -860,7 +982,7 @@ export class ProductsService {
     });
 
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
-    return this.findOne(productId);
+    return this.findOne(productId, { includeDrafts: true });
   }
 
   // A product with no sellable option would still be listed and still be
@@ -996,12 +1118,23 @@ export class ProductsService {
     qb: SelectQueryBuilder<Product>,
     optionIds: number[],
     onlyInStock: boolean,
+    known?: Map<number, { attributeId: number; isAxis: boolean }>,
   ): Promise<void> {
-    const options = await this.dataSource.getRepository(AttributeOption).find({
-      where: { id: In(optionIds) },
-      relations: { attribute: true },
-    });
-    if (options.length === 0) {
+    const meta = new Map(known ?? []);
+    const unknown = optionIds.filter((id) => !meta.has(id));
+    if (unknown.length > 0) {
+      const options = await this.dataSource
+        .getRepository(AttributeOption)
+        .find({ where: { id: In(unknown) }, relations: { attribute: true } });
+      for (const option of options) {
+        meta.set(option.id, {
+          attributeId: option.attribute.id,
+          isAxis: option.attribute.is_variant_axis,
+        });
+      }
+    }
+    const resolved = optionIds.filter((id) => meta.has(id));
+    if (resolved.length === 0) {
       qb.andWhere('1 = 0');
       return;
     }
@@ -1010,13 +1143,12 @@ export class ProductsService {
     // attributes are an AND ("black AND size 42").
     const axisGroups = new Map<number, number[]>();
     const productGroups = new Map<number, number[]>();
-    for (const option of options) {
-      const target = option.attribute.is_variant_axis
-        ? axisGroups
-        : productGroups;
-      const list = target.get(option.attribute.id) ?? [];
-      list.push(option.id);
-      target.set(option.attribute.id, list);
+    for (const optionId of resolved) {
+      const { attributeId, isAxis } = meta.get(optionId)!;
+      const target = isAxis ? axisGroups : productGroups;
+      const list = target.get(attributeId) ?? [];
+      list.push(optionId);
+      target.set(attributeId, list);
     }
 
     // Axis values have to meet on ONE variant, not just somewhere in the
@@ -1071,25 +1203,57 @@ export class ProductsService {
       order: { sort_order: 'ASC', id: 'ASC' },
     });
 
+    // Looked up once here rather than inside every count. Counting used to
+    // run the whole listing - rows, categories and these lookups - once per
+    // option: 100+ statements for one filter panel.
+    const optionMeta = new Map<
+      number,
+      { attributeId: number; isAxis: boolean }
+    >();
+    for (const attribute of attributes) {
+      for (const option of attribute.options ?? []) {
+        optionMeta.set(option.id, {
+          attributeId: attribute.id,
+          isAxis: attribute.is_variant_axis,
+        });
+      }
+    }
     const selected = query.attributeOptions ?? [];
-    const selectedOptions = selected.length
-      ? await this.dataSource.getRepository(AttributeOption).find({
-          where: { id: In(selected) },
-          relations: { attribute: true },
-        })
-      : [];
+    const missing = selected.filter((id) => !optionMeta.has(id));
+    if (missing.length > 0) {
+      const extra = await this.dataSource.getRepository(AttributeOption).find({
+        where: { id: In(missing) },
+        relations: { attribute: true },
+      });
+      for (const option of extra) {
+        optionMeta.set(option.id, {
+          attributeId: option.attribute.id,
+          isAxis: option.attribute.is_variant_axis,
+        });
+      }
+    }
+    const context: FilterContext = {
+      optionMeta,
+      categoryIds: query.categoryId
+        ? await this.categoriesService.getDescendantIds(query.categoryId)
+        : undefined,
+    };
 
     const result: ProductFacet[] = [];
     for (const attribute of attributes) {
-      const others = selectedOptions
-        .filter((option) => option.attribute.id !== attribute.id)
-        .map((option) => option.id);
+      const others = selected.filter(
+        (id) => optionMeta.get(id)?.attributeId !== attribute.id,
+      );
 
       const options: ProductFacetOption[] = [];
       for (const option of (attribute.options ?? []).sort(
         (a, b) => a.sort_order - b.sort_order || a.id - b.id,
       )) {
-        const count = await this.countForOptions(query, [...others, option.id]);
+        const count = await this.countForOptions(
+          query,
+          [...others, option.id],
+          context,
+        );
         options.push({
           optionId: option.id,
           value: option.value,
@@ -1112,17 +1276,21 @@ export class ProductsService {
     return result;
   }
 
+  // One COUNT, nothing else: no rows, no ordering, no category lookups.
   private async countForOptions(
     query: FilterProductDto,
     optionIds: number[],
+    context: FilterContext,
   ): Promise<number> {
-    const counted = await this.findAll({
-      ...query,
-      attributeOptions: optionIds,
-      page: 1,
-      limit: 1,
-    });
-    return counted.total;
+    const qb = this.productsRepository
+      .createQueryBuilder('product')
+      .where('product.is_published = TRUE');
+    const matches = await this.applyFilters(
+      qb,
+      { ...query, attributeOptions: optionIds },
+      context,
+    );
+    return matches ? qb.getCount() : 0;
   }
 
   // "You might also like": other products from the same categories,

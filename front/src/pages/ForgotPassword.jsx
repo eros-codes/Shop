@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { Button, Field } from '../components/ui/Primitives';
+import { RESEND_SECONDS, cooldownFrom, useCountdown } from '../lib/useCountdown';
 
 export default function ForgotPassword() {
   const { forgotPassword, resetPassword } = useAuth();
@@ -14,6 +15,8 @@ export default function ForgotPassword() {
   const [form, setForm] = useState({ code: '', password: '' });
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendIn, setResendIn] = useCountdown();
 
   const request = async (event) => {
     event.preventDefault();
@@ -22,13 +25,31 @@ export default function ForgotPassword() {
     try {
       await forgotPassword(mobile.trim());
       setStage('reset');
+      setResendIn(RESEND_SECONDS);
       // The API answers the same way whether or not the number has an
       // account, so this message does too.
       toast.success('اگر این شماره حساب داشته باشد، کد بازیابی پیامک شد');
     } catch (apiError) {
+      setResendIn(cooldownFrom(apiError));
       setError(translateError(apiError));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const resend = async () => {
+    setResending(true);
+    setError(null);
+    try {
+      await forgotPassword(mobile.trim());
+      setForm((current) => ({ ...current, code: '' }));
+      setResendIn(RESEND_SECONDS);
+      toast.success('اگر این شماره حساب داشته باشد، کد تازه پیامک شد');
+    } catch (apiError) {
+      setResendIn(cooldownFrom(apiError));
+      setError(translateError(apiError));
+    } finally {
+      setResending(false);
     }
   };
 
@@ -112,6 +133,18 @@ export default function ForgotPassword() {
             </Field>
             <Button type="submit" variant="primary" block loading={loading}>
               تغییر رمز عبور
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              block
+              loading={resending}
+              disabled={resendIn > 0}
+              onClick={resend}
+            >
+              {resendIn > 0
+                ? `ارسال دوباره کد تا ${resendIn.toLocaleString('fa-IR')} ثانیه دیگر`
+                : 'ارسال دوباره کد'}
             </Button>
           </form>
         )}

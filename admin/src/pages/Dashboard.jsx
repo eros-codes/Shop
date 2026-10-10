@@ -12,6 +12,7 @@ import {
 import { api } from '../lib/api';
 import { formatToman } from '../lib/format';
 import { EmptyState } from '../components/Primitives';
+import SalesChart from '../components/SalesChart';
 import { ORDER_STATUS } from '../lib/status';
 
 function Stat({ icon: Icon, label, value, tone }) {
@@ -63,7 +64,6 @@ export default function Dashboard() {
   }, []);
 
   const periods = (sales?.periods ?? []).slice(-14);
-  const peak = Math.max(1, ...periods.map((period) => period.net));
   const byStatus = summary?.ordersByStatus ?? {};
 
   return (
@@ -104,18 +104,7 @@ export default function Dashboard() {
             {periods.length === 0 ? (
               <EmptyState title="هنوز فروشی ثبت نشده" />
             ) : (
-              <div className="chart">
-                {periods.map((period) => (
-                  <div className="chart-col" key={period.period}>
-                    <div
-                      className="chart-bar"
-                      style={{ height: `${Math.max(4, (period.net / peak) * 100)}%` }}
-                      data-value={formatToman(period.net)}
-                    />
-                    <span className="chart-label">{period.period.slice(5)}</span>
-                  </div>
-                ))}
-              </div>
+              <SalesChart periods={periods} granularity={sales?.granularity} />
             )}
           </div>
         </section>

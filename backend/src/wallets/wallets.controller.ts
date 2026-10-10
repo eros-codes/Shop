@@ -22,6 +22,7 @@ import {
 } from '../auth/decorators/current-user.decorator';
 import { ParseIdPipe } from '../common/pipes/parse-id.pipe';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 
 @UseGuards(JwtAuthGuard)
 @ApiTags('Wallets')
@@ -74,6 +75,8 @@ export class WalletsController {
     return { data: wallet, message: 'Wallet found' };
   }
 
+  // Opens a payment session at the gateway on every call.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post(':id/charge/request')
   async requestCharge(
     @Param('id', ParseIdPipe) id: number,

@@ -12,7 +12,7 @@ import { Category } from './entities/category.entity';
 import { slugify } from '../common/utils/slugify';
 import { DataSource, In, IsNull, Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
-import { BasketItem } from '../users/entities/basket-item.entity';
+import { softDeleteProducts } from '../products/utils/product-delete';
 import { PaginatedResult } from '../common/interfaces/paginated-result.interface';
 import { isDuplicateEntryError } from '../common/database/mysql-errors';
 import {
@@ -195,15 +195,8 @@ export class CategoriesService {
           (productId) => !shared.has(productId),
         );
 
-        if (exclusiveIds.length > 0) {
-          await manager.softDelete(Product, { id: In(exclusiveIds) });
-          await manager
-            .createQueryBuilder()
-            .delete()
-            .from(BasketItem)
-            .where('productId IN (:...exclusiveIds)', { exclusiveIds })
-            .execute();
-        }
+        // Their variants go too, or their SKUs stay reserved for ever.
+        await softDeleteProducts(manager, exclusiveIds);
         await manager.softDelete(Category, { id });
         return exclusiveIds;
       },

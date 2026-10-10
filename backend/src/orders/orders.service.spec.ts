@@ -5,7 +5,6 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { Order } from './entities/order.entity';
@@ -129,6 +128,7 @@ describe('OrdersService', () => {
 
     const mockManager = {
       query: jest.fn().mockResolvedValue([]),
+      find: jest.fn().mockResolvedValue([]),
       getRepository: jest.fn((entity) => {
         if (entity === BasketItem) return basketRepo;
         if (entity === User) return userRepo;
@@ -208,6 +208,7 @@ describe('OrdersService', () => {
   const product = {
     id: 1,
     title: 'Test Product',
+    is_published: true,
     price: 100,
     stock: 5,
     effectivePrice: () => 100,
@@ -268,6 +269,34 @@ describe('OrdersService', () => {
           product: { id: baseDto.items[0].productId },
         }),
       );
+    });
+
+    // baseDto sends no variantId (the product has one option), but the
+    // basket line was stored with the variant it resolved to - matching on
+    // "variant IS NULL" left it in the basket to be bought again.
+    it('clears the basket line of the variant actually sold, even when none was sent', async () => {
+      userRepo.findOneBy.mockResolvedValue({ id: 7 });
+      addressRepo.findOne.mockResolvedValue(address);
+      productRepo.find.mockResolvedValue([{ ...product }]);
+
+      await service.create(7, baseDto, 'idem-key-0101');
+
+      expect(basketRepo.delete).toHaveBeenCalledWith({
+        user: { id: 7 },
+        product: { id: 1 },
+        variant: { id: 11 },
+      });
+    });
+
+    it('refuses a product the shop has unpublished, even by id', async () => {
+      userRepo.findOneBy.mockResolvedValue({ id: 7 });
+      addressRepo.findOne.mockResolvedValue(address);
+      productRepo.find.mockResolvedValue([{ ...product, is_published: false }]);
+
+      await expect(
+        service.create(7, baseDto, 'idem-key-0102'),
+      ).rejects.toMatchObject({ code: ErrorCodes.VARIANT_NOT_FOR_SALE });
+      expect(orderRepo.save).not.toHaveBeenCalled();
     });
 
     it('leaves the basket alone when the order could not be created', async () => {
@@ -411,6 +440,7 @@ describe('OrdersService', () => {
       const productA = {
         id: 1,
         title: 'A',
+        is_published: true,
         price: 100,
         stock: 5,
         effectivePrice: () => 100,
@@ -418,6 +448,7 @@ describe('OrdersService', () => {
       const productB = {
         id: 2,
         title: 'B',
+        is_published: true,
         price: 50,
         stock: 3,
         effectivePrice: () => 50,
@@ -473,7 +504,14 @@ describe('OrdersService', () => {
         items: [],
       });
       productRepo.find.mockResolvedValue([
-        { id: 1, title: 'Gone', price: 10, stock: 9, deleted_at: new Date() },
+        {
+          id: 1,
+          title: 'Gone',
+          is_published: true,
+          price: 10,
+          stock: 9,
+          deleted_at: new Date(),
+        },
       ]);
 
       await expect(
@@ -493,7 +531,7 @@ describe('OrdersService', () => {
 
       await expect(
         service.update(1, { items: [{ productId: 1, quantity: 1 }] } as any),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.ORDER_NOT_EDITABLE });
       expect(productRepo.save).not.toHaveBeenCalled();
     });
 
@@ -583,7 +621,7 @@ describe('OrdersService', () => {
 
       await expect(
         service.updateStatus(1, { status: OrderStatusEnum.Paid }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.INVALID_STATUS_TRANSITION });
     });
 
     it('rejects skipping ahead (Sent -> Cancelled is not allowed once shipped)', async () => {
@@ -595,7 +633,7 @@ describe('OrdersService', () => {
 
       await expect(
         service.updateStatus(1, { status: OrderStatusEnum.Cancelled }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.INVALID_STATUS_TRANSITION });
     });
 
     it('allows a valid transition (Pending -> Paid)', async () => {
@@ -612,6 +650,32 @@ describe('OrdersService', () => {
 
       expect(result.status).toBe(OrderStatusEnum.Paid);
       expect(result.payed_time).toBeInstanceOf(Date);
+    });
+
+    // Re-sending the current status is how a tracking code gets corrected.
+    // It used to run the status's side effects again: a second "paid"
+    // counted the sale twice.
+    it('only updates the tracking code when the status does not change', async () => {
+      orderRepo.findOne.mockResolvedValue({
+        id: 1,
+        status: OrderStatusEnum.Paid,
+        items: [{ quantity: 2, product: { id: 1 }, variant: { id: 11 } }],
+        payed_time: new Date(),
+        invoice_number: 'INV-1405-000001',
+      });
+
+      await service.updateStatus(1, {
+        status: OrderStatusEnum.Paid,
+        tracking_code: 'TRK-9',
+      });
+
+      expect(orderRepo.update).toHaveBeenCalledWith(
+        { id: 1 },
+        { tracking_code: 'TRK-9' },
+      );
+      expect(orderRepo.save).not.toHaveBeenCalled();
+      expect(invoiceService.nextNumber).not.toHaveBeenCalled();
+      expect(notifications.notify).not.toHaveBeenCalled();
     });
 
     it('restores stock when cancelling a Paid (not-yet-shipped) order', async () => {
@@ -637,6 +701,61 @@ describe('OrdersService', () => {
       expect(catalogCache.invalidate).toHaveBeenCalledWith(
         CatalogCacheScope.Products,
       );
+    });
+  });
+
+  // A customer's DELETE used to soft-delete their order - a cancelled and
+  // refunded one included - and it was gone from the panel.
+  describe('cancelByCustomer', () => {
+    const actor = { userId: 7, label: '09120000002' };
+
+    it('cancels an untouched order and keeps it on record', async () => {
+      orderRepo.findOne.mockResolvedValue({
+        id: 1,
+        status: OrderStatusEnum.Pending,
+        items: [{ quantity: 1, product, variant: { id: 11 } }],
+      });
+
+      const result = await service.cancelByCustomer(1, actor);
+
+      expect(result.status).toBe(OrderStatusEnum.Cancelled);
+      expect(orderRepo.softDelete).not.toHaveBeenCalled();
+      expect(variantRepo.increment).toHaveBeenCalledWith(
+        { id: 11 },
+        'stock',
+        1,
+      );
+    });
+
+    it('refuses an order the shop has already taken on', async () => {
+      orderRepo.findOne.mockResolvedValue({
+        id: 1,
+        status: OrderStatusEnum.Paid,
+        total_price: 1000,
+        refunded_amount: 0,
+        user: { id: 7 },
+        items: [],
+      });
+
+      await expect(service.cancelByCustomer(1, actor)).rejects.toMatchObject({
+        code: ErrorCodes.ORDER_NOT_CANCELLABLE,
+      });
+      expect(orderRepo.save).not.toHaveBeenCalled();
+      expect(walletsService.refund).not.toHaveBeenCalled();
+    });
+
+    it('treats a repeated request on a cancelled order as done', async () => {
+      orderRepo.findOne.mockResolvedValue({
+        id: 1,
+        status: OrderStatusEnum.Cancelled,
+        items: [],
+      });
+
+      const result = await service.cancelByCustomer(1, actor);
+
+      expect(result.status).toBe(OrderStatusEnum.Cancelled);
+      expect(orderRepo.save).not.toHaveBeenCalled();
+      expect(orderRepo.softDelete).not.toHaveBeenCalled();
     });
   });
 
@@ -834,7 +953,10 @@ describe('OrdersService', () => {
 
       await expect(
         service.create(7, zarinpalDto as any, 'idem-key-0006'),
-      ).rejects.toThrow(ServiceUnavailableException);
+      ).rejects.toMatchObject({
+        status: 503,
+        code: ErrorCodes.PAYMENT_GATEWAY_UNAVAILABLE,
+      });
 
       expect(variantRepo.increment).toHaveBeenCalledWith(
         { id: 11 },
@@ -864,7 +986,7 @@ describe('OrdersService', () => {
 
       await expect(
         service.update(1, { items: [{ productId: 1, quantity: 1 }] } as any),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: ErrorCodes.ORDER_NOT_EDITABLE });
       expect(productRepo.save).not.toHaveBeenCalled();
     });
 
@@ -877,7 +999,7 @@ describe('OrdersService', () => {
         discount: { id: 3 },
       });
       productRepo.find.mockResolvedValue([
-        { id: 1, title: 'A', price: 100, stock: 9 },
+        { id: 1, title: 'A', is_published: true, price: 100, stock: 9 },
       ]);
       discountCodesService.findWithScope.mockResolvedValue({ id: 3 });
       discountCodesService.computeAmount.mockReturnValue(20);
@@ -996,6 +1118,35 @@ describe('OrdersService', () => {
       expect(outcome).toBe('already_paid');
       expect(orderRepo.update).not.toHaveBeenCalled();
     });
+
+    // A customer can reopen the gateway's callback URL from their history
+    // at any time, and ZarinPal answers a repeat verify with 101 ("verified
+    // before"). Once the shop has started on the order it is no longer
+    // `paid` - but it is still a paid order, not a closed one, and treating
+    // it as a late payment handed the whole amount back to the wallet.
+    it.each([
+      OrderStatusEnum.Processing,
+      OrderStatusEnum.Sent,
+      OrderStatusEnum.Delivered,
+    ])(
+      'never refunds a replayed callback for an order that is already %s',
+      async (status) => {
+        orderRepo.findOne.mockResolvedValue({
+          id: 1,
+          status,
+          total_price: 200,
+          refunded_amount: 0,
+          user: { id: 7 },
+          items: [],
+        });
+
+        const outcome = await service.finalizePaidOrder(1, 'zarinpal:9988');
+
+        expect(outcome).toBe('already_paid');
+        expect(walletsService.refund).not.toHaveBeenCalled();
+        expect(orderRepo.update).not.toHaveBeenCalled();
+      },
+    );
 
     it('refunds to the wallet when the money lands after the order closed', async () => {
       orderRepo.findOne.mockResolvedValue({

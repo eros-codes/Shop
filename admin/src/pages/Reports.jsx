@@ -8,10 +8,18 @@ import {
   EmptyState,
   Field,
 } from '../components/Primitives';
+import SalesChart from '../components/SalesChart';
 
-const today = () => new Date().toISOString().slice(0, 10);
-const daysAgo = (days) =>
-  new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+// The calendar day on this device. toISOString() gives the UTC one, which
+// is still "yesterday" until 03:30 in Tehran.
+const localDay = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const today = () => localDay(new Date());
+const daysAgo = (days) => {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return localDay(date);
+};
 
 export default function Reports() {
   const [range, setRange] = useState({ from: daysAgo(29), to: today() });
@@ -27,11 +35,9 @@ export default function Reports() {
 
   const load = useCallback(() => {
     setLoading(true);
-    const query = buildQuery({
-      from: new Date(range.from).toISOString(),
-      to: new Date(`${range.to}T23:59:59`).toISOString(),
-      granularity,
-    });
+    // Bare dates: the API reads each as a whole day on the shop's (Tehran)
+    // clock, wherever this browser happens to be.
+    const query = buildQuery({ from: range.from, to: range.to, granularity });
     Promise.allSettled([
       api.get(`/reports/sales${query}`, { auth: true }),
       api.get(`/reports/top-products${query}&limit=10`, { auth: true }),
@@ -54,7 +60,6 @@ export default function Reports() {
   }, [threshold]);
 
   const periods = sales?.periods ?? [];
-  const peak = Math.max(1, ...periods.map((period) => period.net));
   const totals = sales?.totals;
 
   return (
@@ -144,18 +149,7 @@ export default function Reports() {
           ) : periods.length === 0 ? (
             <EmptyState title="در این بازه فروشی ثبت نشده" />
           ) : (
-            <div className="chart">
-              {periods.slice(-30).map((period) => (
-                <div className="chart-col" key={period.period}>
-                  <div
-                    className="chart-bar"
-                    style={{ height: `${Math.max(4, (period.net / peak) * 100)}%` }}
-                    data-value={`${period.period}: ${formatToman(period.net)}`}
-                  />
-                  <span className="chart-label">{period.period.slice(5)}</span>
-                </div>
-              ))}
-            </div>
+            <SalesChart periods={periods.slice(-30)} granularity={sales?.granularity} />
           )}
         </div>
       </section>

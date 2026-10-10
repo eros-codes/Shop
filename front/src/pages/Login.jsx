@@ -5,6 +5,16 @@ import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { Button, Field } from '../components/ui/Primitives';
 
+// Where to go after signing in, from ?next=. Only a path on this site:
+// "//evil.com" and "/\evil.com" both start with a slash, and browsers
+// read either as another host - a sign-in link that lands the customer on
+// a look-alike shop.
+function safeNext(value) {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')
+    ? value
+    : '/account';
+}
+
 export default function Login() {
   const { login } = useAuth();
   const toast = useToast();
@@ -21,7 +31,7 @@ export default function Login() {
     try {
       await login(form.mobile.trim(), form.password);
       toast.success('خوش آمدید');
-      navigate(params.get('next') ?? '/account', { replace: true });
+      navigate(safeNext(params.get('next')), { replace: true });
     } catch (apiError) {
       setError(translateError(apiError));
     } finally {

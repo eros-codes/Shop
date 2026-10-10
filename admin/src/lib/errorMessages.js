@@ -33,6 +33,7 @@ const MESSAGES = {
   COD_LIMIT_EXCEEDED: 'مبلغ سفارش برای پرداخت در محل زیاد است؛ لطفاً آنلاین پرداخت کنید.',
   IDEMPOTENCY_KEY_REQUIRED: 'درخواست ناقص بود؛ دوباره تلاش کنید.',
   ORDER_NOT_EDITABLE: 'این سفارش دیگر قابل ویرایش نیست.',
+  ORDER_NOT_CANCELLABLE: 'این سفارش دیگر قابل لغو نیست؛ با پشتیبانی تماس بگیرید.',
   INVALID_STATUS_TRANSITION: 'این تغییر وضعیت ممکن نیست.',
 
   INSUFFICIENT_WALLET_BALANCE: 'موجودی کیف پول کافی نیست.',

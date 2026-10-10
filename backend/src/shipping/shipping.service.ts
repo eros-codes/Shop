@@ -21,6 +21,7 @@ import { isDuplicateEntryError } from '../common/database/mysql-errors';
 import { Address } from '../address/entities/address.entity';
 import { ProductVariant } from '../products/entities/product-variant.entity';
 import { AppError } from '../common/errors/app-error';
+import { normalizePersianText } from '../common/validation/normalize';
 import { ErrorCodes } from '../common/errors/error-codes';
 
 export interface ShippingOption {
@@ -179,9 +180,16 @@ export class ShippingService {
       throw new NotFoundException(`Shipping zone ${dto.zoneId} not found`);
     }
 
+    // Including a removed one: the (method, zone) pair is unique among all
+    // rows, so creating a fresh rate where one was deleted hit the unique
+    // index and the panel got a 500. The old row is brought back instead.
     const existing = await this.ratesRepository.findOne({
       where: { method: { id: methodId }, zone: { id: dto.zoneId } },
+      withDeleted: true,
     });
+    if (existing?.deleted_at) {
+      existing.deleted_at = null;
+    }
     const rate =
       existing ??
       this.ratesRepository.create({
@@ -217,10 +225,14 @@ export class ShippingService {
 
   async resolveZone(province: string): Promise<ShippingZone | null> {
     const zones = await this.zonesRepository.find({ order: { id: 'ASC' } });
-    const normalised = (province ?? '').trim();
+    // The province is typed by the customer. Arabic keyboards give ي/ك
+    // where the zone list has ی/ک, and spacing varies ("آذربایجان شرقی"
+    // with a half-space) - compared raw, those fell through to the default
+    // zone and were charged its price.
+    const normalised = normalizePersianText(province ?? '');
     const match = zones.find((zone) =>
       (zone.provinces ?? []).some(
-        (candidate) => candidate.trim() === normalised,
+        (candidate) => normalizePersianText(candidate) === normalised,
       ),
     );
     return match ?? zones.find((zone) => zone.is_default) ?? null;

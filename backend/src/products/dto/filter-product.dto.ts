@@ -87,4 +87,9 @@ export class FilterProductDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(['ASC', 'DESC'])
   sortOrder?: 'ASC' | 'DESC';
+
+  // Admin panel only - see ProductViewQueryDto.
+  @IsOptional()
+  @IsBooleanString({ message: 'includeDrafts must be true or false' })
+  includeDrafts?: string;
 }

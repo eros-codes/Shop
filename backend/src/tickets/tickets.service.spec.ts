@@ -219,6 +219,27 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('findReplies', () => {
+    it("does not hand a customer the support agent's mobile number", async () => {
+      await service.findReplies(5, { page: 1, limit: 10 });
+
+      expect(qb.addSelect).toHaveBeenCalledWith([
+        'user.id',
+        'user.display_name',
+      ]);
+    });
+
+    it('gives staff the mobile number of whoever wrote each message', async () => {
+      await service.findReplies(5, { page: 1, limit: 10 }, true);
+
+      expect(qb.addSelect).toHaveBeenCalledWith([
+        'user.id',
+        'user.display_name',
+        'user.mobile',
+      ]);
+    });
+  });
+
   describe('remove', () => {
     it('soft-deletes a thread head together with its replies', async () => {
       mockLookups({ id: 5, reply_to: null });

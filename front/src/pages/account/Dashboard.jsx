@@ -90,7 +90,7 @@ export default function Dashboard() {
                 >
                   <div>
                     <div className="strong small">
-                      سفارش {order.invoice_number ?? `#${order.id}`}
+                      سفارش <bdi className="nowrap">{order.invoice_number ?? `#${order.id}`}</bdi>
                     </div>
                     <div className="tiny muted">
                       {order.total_quantity?.toLocaleString('fa-IR')} کالا

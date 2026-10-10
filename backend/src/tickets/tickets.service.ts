@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ForbiddenException,
-  HttpException,
   HttpStatus,
   Injectable,
   NotFoundException,
@@ -16,6 +15,8 @@ import { PaginatedResult } from '../common/interfaces/paginated-result.interface
 import { DataSource, In, IsNull, Not, Repository } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import TicketStatusEnum from './enums/ticket-status.enum';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 const MAX_OPEN_THREADS_PER_USER = 10;
 const TICKET_COOLDOWN_SECONDS = 30;
@@ -58,7 +59,8 @@ export class TicketsService {
         throw new ForbiddenException('You can only reply to your own tickets');
       }
       if (parent.status === TicketStatusEnum.Closed) {
-        throw new BadRequestException(
+        throw AppError.badRequest(
+          ErrorCodes.TICKET_CLOSED,
           'This ticket is closed - open a new one instead of replying to it',
         );
       }
@@ -101,9 +103,12 @@ export class TicketsService {
       const secondsSince =
         (Date.now() - lastTicket.created_at.getTime()) / 1000;
       if (secondsSince < TICKET_COOLDOWN_SECONDS) {
-        throw new HttpException(
-          `Please wait ${Math.ceil(TICKET_COOLDOWN_SECONDS - secondsSince)}s before sending another message`,
+        const retryAfter = Math.ceil(TICKET_COOLDOWN_SECONDS - secondsSince);
+        throw new AppError(
+          ErrorCodes.TICKET_COOLDOWN,
+          `Please wait ${retryAfter}s before sending another message`,
           HttpStatus.TOO_MANY_REQUESTS,
+          { retryAfter },
         );
       }
     }
@@ -118,9 +123,11 @@ export class TicketsService {
       },
     });
     if (openThreads >= MAX_OPEN_THREADS_PER_USER) {
-      throw new HttpException(
+      throw new AppError(
+        ErrorCodes.TICKET_LIMIT_REACHED,
         `You already have ${openThreads} open tickets - please continue in one of them instead of opening another`,
         HttpStatus.TOO_MANY_REQUESTS,
+        { openThreads, limit: MAX_OPEN_THREADS_PER_USER },
       );
     }
   }

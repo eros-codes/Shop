@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
 import Returns from './pages/Returns';
+import Tickets from './pages/Tickets';
 import Reports from './pages/Reports';
 import Products from './pages/Products';
 import Categories from './pages/Categories';
@@ -24,6 +25,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="orders" element={<Orders />} />
         <Route path="returns" element={<Returns />} />
+        <Route path="tickets" element={<Tickets />} />
         <Route path="reports" element={<Reports />} />
         <Route path="products" element={<Products />} />
         <Route path="categories" element={<Categories />} />

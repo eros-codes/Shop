@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Check, Package, RotateCcw, Truck } from 'lucide-react';
-import { api } from '../../lib/api';
+import { Check, Headphones, Package, RotateCcw, Truck } from 'lucide-react';
+import { api, buildQuery } from '../../lib/api';
 import { useToast } from '../../context/ToastContext';
 import { translateError } from '../../lib/errorMessages';
 import { formatDateTime, formatToman } from '../../lib/format';
@@ -98,7 +98,7 @@ export default function OrderDetail() {
         <div className="spread" style={{ flexWrap: 'wrap', gap: 10 }}>
           <div>
             <h1 style={{ fontSize: 18, fontWeight: 700 }}>
-              {order.invoice_number ?? `سفارش #${order.id}`}
+              <bdi className="nowrap">{order.invoice_number ?? `سفارش #${order.id}`}</bdi>
             </h1>
             <div className="tiny muted">
               ثبت در {formatDateTime(order.createdAt ?? order.created_at)}
@@ -293,6 +293,22 @@ export default function OrderDetail() {
           )}
         </div>
       ) : null}
+
+      <div className="card card-pad spread" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <span className="row small" style={{ gap: 8 }}>
+          <Headphones size={18} color="var(--brand-600)" />
+          سؤال یا مشکلی درباره‌ی این سفارش دارید؟
+        </span>
+        <Link
+          className="btn btn-soft btn-sm"
+          to={`/account/tickets/new${buildQuery({
+            subject: 'order',
+            title: `پیگیری سفارش ${order.invoice_number ?? `#${order.id}`}`,
+          })}`}
+        >
+          ثبت تیکت پشتیبانی
+        </Link>
+      </div>
     </div>
   );
 }

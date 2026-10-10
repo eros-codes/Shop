@@ -44,7 +44,10 @@ export default function Returns() {
           <div className="card card-pad spread" key={request.id} style={{ flexWrap: 'wrap', gap: 10 }}>
             <div>
               <div className="strong small">
-                مرجوعی سفارش {request.order?.invoice_number ?? `#${request.order?.id}`}
+                مرجوعی سفارش{' '}
+                <bdi className="nowrap">
+                  {request.order?.invoice_number ?? `#${request.order?.id}`}
+                </bdi>
               </div>
               <div className="tiny muted">ثبت در {formatDate(request.created_at)}</div>
               {request.admin_note ? (

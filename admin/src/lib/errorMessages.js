@@ -62,6 +62,10 @@ const MESSAGES = {
   RETURN_QUANTITY_EXCEEDED: 'تعداد مرجوعی بیشتر از چیزی است که خریده‌اید.',
   REFUND_EXCEEDS_PAID: 'مبلغ بازگشتی از مبلغ پرداختی بیشتر است.',
 
+  TICKET_CLOSED: 'این تیکت بسته شده است؛ برای پاسخ‌دادن، ابتدا آن را بازگشایی کنید.',
+  TICKET_COOLDOWN: 'پیام قبلی همین الان ثبت شد؛ چند ثانیه صبر کنید و دوباره بفرستید.',
+  TICKET_LIMIT_REACHED: 'تعداد تیکت‌های باز این حساب به سقف رسیده است.',
+
   NETWORK_ERROR: 'ارتباط با سرور برقرار نشد. اینترنت یا سرور را بررسی کنید.',
 };
 
@@ -78,6 +82,11 @@ function withDetails(code, details) {
   }
   if (code === 'OTP_INCORRECT' && details.attemptsLeft !== undefined) {
     return `کد واردشده درست نیست. ${details.attemptsLeft} تلاش دیگر باقی مانده است.`;
+  }
+  // The API spaces out every account's messages, support staff included, so
+  // two quick replies in a row land here.
+  if (code === 'TICKET_COOLDOWN' && details.retryAfter !== undefined) {
+    return `پیام قبلی همین الان ثبت شد؛ ${Number(details.retryAfter).toLocaleString('fa-IR')} ثانیه دیگر دوباره بفرستید.`;
   }
   return null;
 }

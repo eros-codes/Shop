@@ -118,7 +118,7 @@ export default function Orders() {
                     <tr key={order.id}>
                       <td>
                         <div className="strong">
-                          {order.invoice_number ?? `#${order.id}`}
+                          <bdi className="nowrap">{order.invoice_number ?? `#${order.id}`}</bdi>
                         </div>
                         <div className="tiny muted">
                           {order.total_quantity?.toLocaleString('fa-IR')} کالا

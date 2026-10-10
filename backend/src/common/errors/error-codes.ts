@@ -68,6 +68,12 @@ export const ErrorCodes = {
   RETURN_NOT_ALLOWED: 'RETURN_NOT_ALLOWED',
   RETURN_QUANTITY_EXCEEDED: 'RETURN_QUANTITY_EXCEEDED',
   REFUND_EXCEEDS_PAID: 'REFUND_EXCEEDS_PAID',
+
+  // Support tickets. Both limits answer 429, but "wait a few seconds" and
+  // "close one of your open tickets first" are different instructions.
+  TICKET_CLOSED: 'TICKET_CLOSED',
+  TICKET_COOLDOWN: 'TICKET_COOLDOWN',
+  TICKET_LIMIT_REACHED: 'TICKET_LIMIT_REACHED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

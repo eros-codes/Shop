@@ -10,6 +10,7 @@ import { TicketsService } from './tickets.service';
 import { Ticket } from './entities/ticket.entity';
 import { UsersService } from '../users/users.service';
 import TicketStatusEnum from './enums/ticket-status.enum';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 const mockRepo = () => ({
   findOne: jest.fn(),
@@ -143,7 +144,7 @@ describe('TicketsService', () => {
 
       await expect(
         service.create(7, { ...body, reply_to: 5 } as any),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ status: 400, code: ErrorCodes.TICKET_CLOSED });
     });
 
     it('rejects replying to a ticket that is already itself a reply', async () => {
@@ -160,6 +161,8 @@ describe('TicketsService', () => {
       await expect(service.create(7, { ...body } as any)).rejects.toMatchObject(
         {
           status: 429,
+          code: ErrorCodes.TICKET_COOLDOWN,
+          details: { retryAfter: expect.any(Number) },
         },
       );
     });
@@ -171,6 +174,8 @@ describe('TicketsService', () => {
       await expect(service.create(7, { ...body } as any)).rejects.toMatchObject(
         {
           status: 429,
+          code: ErrorCodes.TICKET_LIMIT_REACHED,
+          details: { limit: 10 },
         },
       );
       expect(ticketRepo.save).not.toHaveBeenCalled();

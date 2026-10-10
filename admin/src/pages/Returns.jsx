@@ -117,7 +117,9 @@ export default function Returns() {
                   return (
                     <tr key={request.id}>
                       <td className="small strong">
-                        {request.order?.invoice_number ?? `#${request.order?.id}`}
+                        <bdi className="nowrap">
+                          {request.order?.invoice_number ?? `#${request.order?.id}`}
+                        </bdi>
                       </td>
                       <td className="small">
                         {request.user?.display_name}
@@ -168,7 +170,7 @@ export default function Returns() {
 
       {resolving ? (
         <Modal
-          title={`بررسی مرجوعی ${resolving.order?.invoice_number ?? `#${resolving.order?.id}`}`}
+          title={`بررسی مرجوعی ⁨${resolving.order?.invoice_number ?? `#${resolving.order?.id}`}⁩`}
           onClose={() => setResolving(null)}
           footer={
             <>

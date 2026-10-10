@@ -109,7 +109,7 @@ export default function Comments() {
                       {comment.rate ? `${comment.rate} ★` : '—'}
                     </td>
                     <td className="small" style={{ maxWidth: 320 }}>
-                      {comment.text}
+                      {comment.comment}
                     </td>
                     <td className="tiny muted">
                       {formatDate(comment.created_at ?? comment.createdAt)}

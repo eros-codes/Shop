@@ -61,6 +61,11 @@ const MESSAGES = {
   RETURN_QUANTITY_EXCEEDED: 'تعداد مرجوعی بیشتر از چیزی است که خریده‌اید.',
   REFUND_EXCEEDS_PAID: 'مبلغ بازگشتی از مبلغ پرداختی بیشتر است.',
 
+  TICKET_CLOSED: 'این تیکت بسته شده است؛ اگر هنوز مشکلی دارید، تیکت تازه‌ای ثبت کنید.',
+  TICKET_COOLDOWN: 'پیام قبلی‌تان همین الان ثبت شد؛ چند ثانیه صبر کنید و دوباره بفرستید.',
+  TICKET_LIMIT_REACHED:
+    'چند تیکت باز دارید؛ لطفاً در یکی از همان‌ها ادامه دهید تا کارشناسان پاسخ دهند.',
+
   NETWORK_ERROR: 'ارتباط با سرور برقرار نشد. اینترنت یا سرور را بررسی کنید.',
 };
 
@@ -83,6 +88,12 @@ function withDetails(code, details) {
   }
   if (code === 'OTP_INCORRECT' && details.attemptsLeft !== undefined) {
     return `کد واردشده درست نیست. ${details.attemptsLeft} تلاش دیگر باقی مانده است.`;
+  }
+  if (code === 'TICKET_COOLDOWN' && details.retryAfter !== undefined) {
+    return `لطفاً ${Number(details.retryAfter).toLocaleString('fa-IR')} ثانیه دیگر دوباره بفرستید.`;
+  }
+  if (code === 'TICKET_LIMIT_REACHED' && details.openThreads !== undefined) {
+    return `${Number(details.openThreads).toLocaleString('fa-IR')} تیکت باز دارید؛ لطفاً در یکی از همان‌ها ادامه دهید تا کارشناسان پاسخ دهند.`;
   }
   return null;
 }

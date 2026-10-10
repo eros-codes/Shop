@@ -46,6 +46,11 @@ export function CartProvider({ children }) {
   const toast = useToast();
   const [lines, setLines] = useState(() => readGuestCart());
   const [loading, setLoading] = useState(false);
+  // Whether `lines` is the real basket yet. A signed-in customer's basket
+  // lives on the server, so until it has answered the cart only *looks*
+  // empty - and checkout, reloaded (as phones do with background tabs),
+  // took that for an empty cart and sent the customer away.
+  const [settled, setSettled] = useState(false);
   const mergedFor = useRef(null);
 
   const loadServerCart = useCallback(async () => {
@@ -83,10 +88,12 @@ export function CartProvider({ children }) {
     if (!isAuthenticated) {
       mergedFor.current = null;
       setLines(readGuestCart());
+      setSettled(true);
       return;
     }
     if (mergedFor.current === user?.id) return;
     mergedFor.current = user?.id;
+    setSettled(false);
 
     (async () => {
       const guestLines = readGuestCart();
@@ -112,6 +119,7 @@ export function CartProvider({ children }) {
         }
       }
       await loadServerCart();
+      setSettled(true);
     })();
   }, [ready, isAuthenticated, user?.id, loadServerCart, toast]);
 
@@ -282,6 +290,7 @@ export function CartProvider({ children }) {
     () => ({
       lines,
       loading,
+      settled,
       count: totals.count,
       goodsTotal: totals.goods,
       add,
@@ -291,7 +300,7 @@ export function CartProvider({ children }) {
       reload: loadServerCart,
       clearLocal,
     }),
-    [lines, loading, totals, add, increase, decrease, remove, loadServerCart, clearLocal],
+    [lines, loading, settled, totals, add, increase, decrease, remove, loadServerCart, clearLocal],
   );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

@@ -243,6 +243,9 @@ export class ProductsService {
         'product.stock',
         'product.rating_avg',
         'product.rating_count',
+        // The admin list badges each row published/draft from this; left
+        // out, every product in the panel read "draft".
+        'product.is_published',
         'product.created_at',
         'product.updated_at',
       ])
@@ -1143,6 +1146,14 @@ export class ProductsService {
     const qb = this.productsRepository
       .createQueryBuilder('product')
       .leftJoinAndSelect('product.brand', 'brand')
+      // The same cover the listing serves; without it every card in "you
+      // might also like" rendered as a broken image.
+      .leftJoinAndMapOne(
+        'product.coverImage',
+        'product.images',
+        'cover',
+        'cover.order = 0',
+      )
       .where('product.id != :productId', { productId })
       .andWhere('product.deleted_at IS NULL')
       .andWhere('product.is_published = 1');

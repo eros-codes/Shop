@@ -220,7 +220,9 @@ export default function Dashboard() {
               returns.map((request) => (
                 <Link className="spread" key={request.id} to="/returns">
                   <span className="small">
-                    {request.order?.invoice_number ?? `سفارش #${request.order?.id}`}
+                    <bdi className="nowrap">
+                      {request.order?.invoice_number ?? `سفارش #${request.order?.id}`}
+                    </bdi>
                   </span>
                   <span className="tiny muted">{request.user?.display_name}</span>
                 </Link>

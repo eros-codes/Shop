@@ -51,7 +51,7 @@ export default function Orders() {
             <div className="spread" style={{ flexWrap: 'wrap', gap: 10 }}>
               <div>
                 <div className="strong">
-                  {order.invoice_number ?? `سفارش #${order.id}`}
+                  <bdi className="nowrap">{order.invoice_number ?? `سفارش #${order.id}`}</bdi>
                 </div>
                 <div className="tiny muted">
                   ثبت در {formatDate(order.createdAt ?? order.created_at)}

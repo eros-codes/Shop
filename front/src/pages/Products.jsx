@@ -7,6 +7,7 @@ import ProductCard from '../components/product/ProductCard';
 import {
   Breadcrumb,
   ConnectionError,
+  Drawer,
   EmptyState,
   Pagination,
   SkeletonCard,
@@ -374,9 +375,7 @@ export default function Products() {
             </button>
 
             <div className="sort-tabs">
-              <span className="small muted" style={{ marginInlineEnd: 6 }}>
-                مرتب‌سازی:
-              </span>
+              <span className="small muted sort-label">مرتب‌سازی:</span>
               {SORTS.map((sort) => (
                 <button
                   key={sort.value}
@@ -391,7 +390,7 @@ export default function Products() {
               ))}
             </div>
 
-            <span className="small muted" style={{ marginInlineStart: 'auto' }}>
+            <span className="small muted toolbar-count">
               {result.total.toLocaleString('fa-IR')} کالا
             </span>
           </div>
@@ -457,25 +456,17 @@ export default function Products() {
       </div>
 
       {filtersOpen ? (
-        <>
-          <div className="drawer-backdrop" onClick={() => setFiltersOpen(false)} />
-          <aside className="drawer">
-            <div className="spread" style={{ marginBottom: 14 }}>
-              <span className="strong">فیلترها</span>
-              <button className="icon-btn" onClick={() => setFiltersOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            {renderFilters('drawer')}
-            <button
-              className="btn btn-primary btn-block"
-              style={{ marginTop: 14 }}
-              onClick={() => setFiltersOpen(false)}
-            >
+        <Drawer
+          title="فیلترها"
+          onClose={() => setFiltersOpen(false)}
+          footer={
+            <button className="btn btn-primary btn-block" onClick={() => setFiltersOpen(false)}>
               نمایش {result.total.toLocaleString('fa-IR')} کالا
             </button>
-          </aside>
-        </>
+          }
+        >
+          {renderFilters('drawer')}
+        </Drawer>
       ) : null}
     </div>
   );

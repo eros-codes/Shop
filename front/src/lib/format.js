@@ -9,7 +9,8 @@ export function toPersianDigits(value) {
 export function formatToman(amount, { withUnit = true } = {}) {
   const number = Number(amount ?? 0);
   const grouped = toPersianDigits(number.toLocaleString('en-US'));
-  return withUnit ? `${grouped} تومان` : grouped;
+  // A no-break space: a price must never wrap with its unit on the next line.
+  return withUnit ? `${grouped}\u00a0تومان` : grouped;
 }
 
 export function formatDate(value) {

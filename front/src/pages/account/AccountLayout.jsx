@@ -1,5 +1,7 @@
-import { NavLink, Navigate, Outlet } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import {
+  Headphones,
   Heart,
   KeyRound,
   LogOut,
@@ -16,6 +18,7 @@ const LINKS = [
   { to: '/account', label: 'پیشخوان', icon: User, end: true },
   { to: '/account/orders', label: 'سفارش‌های من', icon: Package },
   { to: '/account/returns', label: 'مرجوعی‌ها', icon: RotateCcw },
+  { to: '/account/tickets', label: 'تیکت‌های پشتیبانی', icon: Headphones },
   { to: '/account/addresses', label: 'آدرس‌ها', icon: MapPin },
   { to: '/account/wallet', label: 'کیف پول', icon: Wallet },
   { to: '/account/favorites', label: 'علاقه‌مندی‌ها', icon: Heart },
@@ -24,6 +27,16 @@ const LINKS = [
 
 export default function AccountLayout() {
   const { isAuthenticated, ready, user, logout } = useAuth();
+  const location = useLocation();
+  const navRef = useRef(null);
+
+  // On a phone the menu is one scrolling row of tabs; bring the current
+  // one into view so the customer can see where they are.
+  useEffect(() => {
+    navRef.current
+      ?.querySelector('.account-link.is-active')
+      ?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [location.pathname, ready, isAuthenticated]);
 
   if (!ready) {
     return (
@@ -34,7 +47,10 @@ export default function AccountLayout() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login?next=/account" replace />;
+    // Come back to the page that was asked for - a "submit a ticket" link
+    // should not drop the customer on the dashboard after signing in.
+    const next = encodeURIComponent(location.pathname + location.search);
+    return <Navigate to={`/login?next=${next}`} replace />;
   }
 
   return (
@@ -42,9 +58,9 @@ export default function AccountLayout() {
       <Breadcrumb items={[{ label: 'حساب کاربری' }]} />
 
       <div className="account">
-        <aside className="card account-nav">
+        <aside className="card account-nav" ref={navRef}>
           <div
-            className="row"
+            className="row account-user"
             style={{ gap: 10, padding: '10px 12px 14px', borderBottom: '1px solid var(--line)' }}
           >
             <span
@@ -81,7 +97,7 @@ export default function AccountLayout() {
           ))}
 
           <button
-            className="account-link"
+            className="account-link account-logout"
             style={{
               border: 'none',
               background: 'none',

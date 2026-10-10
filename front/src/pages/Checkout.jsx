@@ -15,6 +15,7 @@ import { useCart } from '../context/CartContext';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { formatToman } from '../lib/format';
+import { useInView } from '../lib/useInView';
 import { Breadcrumb, Button, Field } from '../components/ui/Primitives';
 
 const STEPS = ['آدرس', 'روش ارسال', 'پرداخت'];
@@ -23,7 +24,7 @@ export default function Checkout() {
   const navigate = useNavigate();
   const toast = useToast();
   const { user } = useAuth();
-  const { lines, goodsTotal, reload, clearLocal } = useCart();
+  const { lines, goodsTotal, reload, clearLocal, settled } = useCart();
 
   const [addresses, setAddresses] = useState([]);
   const [addressId, setAddressId] = useState(null);
@@ -61,8 +62,8 @@ export default function Checkout() {
   );
 
   useEffect(() => {
-    if (lines.length === 0) navigate('/cart', { replace: true });
-  }, [lines.length, navigate]);
+    if (settled && lines.length === 0) navigate('/cart', { replace: true });
+  }, [settled, lines.length, navigate]);
 
   useEffect(() => {
     api
@@ -206,6 +207,17 @@ export default function Checkout() {
   const estimatedTotal = goodsTotal + shippingCost + codFee + estimatedTax;
 
   const step = !addressId ? 0 : !shippingMethodId && shippingOptions.length > 0 ? 1 : 2;
+
+  const placeRef = useRef(null);
+  const placeVisible = useInView(placeRef, [settled]);
+
+  if (!settled) {
+    return (
+      <div className="container page">
+        <div className="skeleton" style={{ height: 360, borderRadius: 16 }} />
+      </div>
+    );
+  }
 
   return (
     <div className="container page">
@@ -504,22 +516,39 @@ export default function Checkout() {
             <span>{formatToman(estimatedTotal)}</span>
           </div>
 
-          <Button
-            variant="primary"
-            block
-            size="lg"
-            style={{ marginTop: 14 }}
-            loading={placing}
-            onClick={placeOrder}
-          >
-            ثبت سفارش و پرداخت
-          </Button>
+          <div ref={placeRef}>
+            <Button
+              variant="primary"
+              block
+              size="lg"
+              style={{ marginTop: 14 }}
+              loading={placing}
+              onClick={placeOrder}
+            >
+              ثبت سفارش و پرداخت
+            </Button>
+          </div>
 
           <p className="tiny muted" style={{ marginTop: 10, lineHeight: 1.9 }}>
             مبلغ نهایی و تخفیف‌ها هنگام ثبت سفارش توسط سرور محاسبه می‌شود؛ عدد
             بالا تخمینی است.
           </p>
         </div>
+      </div>
+
+      <div className="mobile-bar" data-hidden={placeVisible} aria-hidden={placeVisible}>
+        <div className="mobile-bar-info">
+          <span className="tiny muted">مبلغ قابل پرداخت</span>
+          <span className="strong nowrap">{formatToman(estimatedTotal)}</span>
+        </div>
+        <Button
+          variant="primary"
+          loading={placing}
+          onClick={placeOrder}
+          tabIndex={placeVisible ? -1 : 0}
+        >
+          ثبت سفارش و پرداخت
+        </Button>
       </div>
     </div>
   );

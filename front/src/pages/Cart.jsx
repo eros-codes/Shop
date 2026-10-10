@@ -1,14 +1,30 @@
+import { useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ImageOff, Minus, Plus, ShoppingBag, Trash2 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { Breadcrumb, Button, EmptyState } from '../components/ui/Primitives';
 import { formatToman } from '../lib/format';
+import { useInView } from '../lib/useInView';
 
 export default function Cart() {
-  const { lines, goodsTotal, increase, decrease, remove, count } = useCart();
+  const { lines, goodsTotal, increase, decrease, remove, count, settled } = useCart();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const ctaRef = useRef(null);
+  const ctaVisible = useInView(ctaRef, [lines.length > 0]);
+  const proceed = () => navigate(isAuthenticated ? '/checkout' : '/login?next=/checkout');
+  const proceedLabel = isAuthenticated ? 'ادامه و تکمیل خرید' : 'ورود و تکمیل خرید';
+
+  // A signed-in basket is still on its way from the server; "your cart is
+  // empty" would be a lie for that half second.
+  if (!settled && lines.length === 0) {
+    return (
+      <div className="container page">
+        <div className="skeleton" style={{ height: 320, borderRadius: 16 }} />
+      </div>
+    );
+  }
 
   if (lines.length === 0) {
     return (
@@ -135,23 +151,27 @@ export default function Cart() {
             <span>{formatToman(goodsTotal)}</span>
           </div>
 
-          <Button
-            variant="primary"
-            block
-            size="lg"
-            style={{ marginTop: 16 }}
-            onClick={() =>
-              navigate(isAuthenticated ? '/checkout' : '/login?next=/checkout')
-            }
-          >
-            {isAuthenticated ? 'ادامه و تکمیل خرید' : 'ورود و تکمیل خرید'}
-          </Button>
+          <div ref={ctaRef}>
+            <Button variant="primary" block size="lg" style={{ marginTop: 16 }} onClick={proceed}>
+              {proceedLabel}
+            </Button>
+          </div>
 
           <p className="tiny muted" style={{ marginTop: 12, lineHeight: 1.9 }}>
             مبلغ نهایی پس از انتخاب آدرس و روش ارسال، همراه با مالیات محاسبه و
             نمایش داده می‌شود.
           </p>
         </div>
+      </div>
+
+      <div className="mobile-bar" data-hidden={ctaVisible} aria-hidden={ctaVisible}>
+        <div className="mobile-bar-info">
+          <span className="tiny muted">جمع سبد</span>
+          <span className="strong nowrap">{formatToman(goodsTotal)}</span>
+        </div>
+        <Button variant="primary" onClick={proceed} tabIndex={ctaVisible ? -1 : 0}>
+          {proceedLabel}
+        </Button>
       </div>
     </div>
   );

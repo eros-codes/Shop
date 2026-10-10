@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -130,6 +130,11 @@ function Row({ title, icon, link, products, loading, failed }) {
 export default function Home() {
   const { categories, brands } = useCatalog();
   const [slide, setSlide] = useState(0);
+  // Image URLs that failed to load. Kept as state rather than hiding the
+  // <img> in place: the banner file 404s before the product photos have
+  // arrived, and a hidden element never came back once they did.
+  const [broken, setBroken] = useState({});
+  const touchStart = useRef(null);
 
   const bestSellers = useProducts({
     sortBy: 'best_selling',
@@ -161,6 +166,20 @@ export default function Home() {
       <section
         className="hero"
         style={{ background: SLIDES[slide].tint, transition: 'background 0.6s ease' }}
+        onTouchStart={(event) => {
+          touchStart.current = event.touches[0].clientX;
+        }}
+        onTouchEnd={(event) => {
+          if (touchStart.current === null) return;
+          const dx = event.changedTouches[0].clientX - touchStart.current;
+          touchStart.current = null;
+          if (Math.abs(dx) < 40) return;
+          // Right-to-left page: dragging the slide to the right brings the
+          // next one in, the way the arrows below are laid out.
+          setSlide((current) =>
+            dx > 0 ? (current + 1) % SLIDES.length : (current - 1 + SLIDES.length) % SLIDES.length,
+          );
+        }}
       >
         {SLIDES.map((item, index) => (
           <div className="hero-slide" key={item.title} data-active={index === slide}>
@@ -175,26 +194,23 @@ export default function Home() {
             </div>
             <div className="hero-art">
               <span className="glow" />
-              {item.image || heroImages[index] ? (
-                <img
-                  src={item.image ?? heroImages[index]}
-                  alt=""
-                  onError={(event) => {
-                    // No banner file yet: fall back to a product photo,
-                    // and if that is missing too, to the drawn shape.
-                    const fallback = heroImages[index];
-                    if (fallback && event.currentTarget.src !== fallback) {
-                      event.currentTarget.src = fallback;
-                    } else {
-                      event.currentTarget.style.display = 'none';
-                    }
-                  }}
-                />
-              ) : (
-                <span className="placeholder-art">
-                  <Sparkles size={40} />
-                </span>
-              )}
+              {(() => {
+                const src = [item.image, heroImages[index]].find(
+                  (candidate) => candidate && !broken[candidate],
+                );
+                return src ? (
+                  <img
+                    key={src}
+                    src={src}
+                    alt=""
+                    onError={() => setBroken((current) => ({ ...current, [src]: true }))}
+                  />
+                ) : (
+                  <span className="placeholder-art">
+                    <Sparkles size={40} />
+                  </span>
+                );
+              })()}
             </div>
           </div>
         ))}

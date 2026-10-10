@@ -39,6 +39,7 @@ export default function Footer() {
             <h4>خدمات مشتریان</h4>
             <Link to="/account/orders">پیگیری سفارش</Link>
             <Link to="/account/returns">مرجوعی و بازگشت کالا</Link>
+            <Link to="/account/tickets/new">ثبت تیکت پشتیبانی</Link>
             <Link to="/account/wallet">کیف پول</Link>
             <Link to="/account/addresses">آدرس‌های من</Link>
           </div>

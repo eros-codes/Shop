@@ -17,6 +17,9 @@ import OrderDetail from './pages/account/OrderDetail';
 import Addresses from './pages/account/Addresses';
 import WalletPage from './pages/account/WalletPage';
 import Returns from './pages/account/Returns';
+import Tickets from './pages/account/Tickets';
+import NewTicket from './pages/account/NewTicket';
+import TicketDetail from './pages/account/TicketDetail';
 import Favorites from './pages/account/Favorites';
 import ChangePassword from './pages/account/ChangePassword';
 
@@ -45,6 +48,9 @@ export default function App() {
           <Route path="orders" element={<Orders />} />
           <Route path="orders/:id" element={<OrderDetail />} />
           <Route path="returns" element={<Returns />} />
+          <Route path="tickets" element={<Tickets />} />
+          <Route path="tickets/new" element={<NewTicket />} />
+          <Route path="tickets/:id" element={<TicketDetail />} />
           <Route path="addresses" element={<Addresses />} />
           <Route path="wallet" element={<WalletPage />} />
           <Route path="favorites" element={<Favorites />} />

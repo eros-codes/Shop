@@ -1,6 +1,48 @@
+import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
-import { Loader2, PackageSearch, WifiOff } from 'lucide-react';
+import { Loader2, PackageSearch, WifiOff, X } from 'lucide-react';
 import { formatToman } from '../../lib/format';
+
+/**
+ * A side sheet for phones: the category menu, the listing filters.
+ *
+ * Rendered straight into <body>. The header it is opened from is sticky
+ * with a backdrop-filter, and a filtered element becomes the containing
+ * block of every position:fixed descendant - a drawer rendered inside the
+ * header was exactly as tall as the header, so the category list sat
+ * clipped and blurred behind it.
+ */
+export function Drawer({ title, onClose, footer, children }) {
+  useEffect(() => {
+    const onKey = (event) => event.key === 'Escape' && onClose?.();
+    window.addEventListener('keydown', onKey);
+    // The page underneath must not scroll while a finger drags the sheet.
+    const { overflow } = document.body.style;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="drawer-head">
+          <span className="strong">{title}</span>
+          <button className="icon-btn" onClick={onClose} aria-label="بستن">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="drawer-body">{children}</div>
+        {footer ? <div className="drawer-foot">{footer}</div> : null}
+      </aside>
+    </>,
+    document.body,
+  );
+}
 
 export function Spinner({ size = 18 }) {
   return <Loader2 size={size} className="spin" style={{ animation: 'spin 0.8s linear infinite' }} />;

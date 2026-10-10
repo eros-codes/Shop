@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Heart,
@@ -24,6 +24,7 @@ import {
   formatToman,
   imageUrl,
 } from '../lib/format';
+import { useInView } from '../lib/useInView';
 import ProductCard from '../components/product/ProductCard';
 import {
   Breadcrumb,
@@ -86,6 +87,11 @@ export default function ProductDetail() {
   const [activeImage, setActiveImage] = useState(0);
   const [tab, setTab] = useState('specs');
   const [adding, setAdding] = useState(false);
+  const buyBoxRef = useRef(null);
+  // On a phone the buy box is a long scroll away once the customer is
+  // reading specs or reviews; a bar at the bottom takes over the moment
+  // the box itself leaves the screen.
+  const buyBoxVisible = useInView(buyBoxRef, [product?.id, loading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,6 +176,7 @@ export default function ProductDetail() {
     ? Number(selectedVariant.stock)
     : Number(product?.stock ?? 0);
   const canBuy = !!product && (axes.length === 0 || !!selectedVariant) && stock > 0;
+  const needsChoice = axes.length > 0 && !selectedVariant;
 
   const descriptiveValues = product?.attributeValues ?? [];
 
@@ -182,19 +189,23 @@ export default function ProductDetail() {
 
   const submitComment = async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    // Held before the await: React clears event.currentTarget once the
+    // handler yields, and resetting through it then threw - the review was
+    // saved but the customer was shown an error.
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     try {
       await api.post(
         '/comments',
         {
           productId: product.id,
-          text: form.get('text'),
+          comment: form.get('comment'),
           rate: Number(form.get('rate')),
         },
         { auth: true },
       );
       toast.success('نظر شما ثبت شد و پس از تأیید نمایش داده می‌شود');
-      event.currentTarget.reset();
+      formElement.reset();
     } catch (error) {
       toast.error(translateError(error));
     }
@@ -352,7 +363,7 @@ export default function ProductDetail() {
             </div>
           ))}
 
-          <div className="buy-box">
+          <div className="buy-box" ref={buyBoxRef}>
             <div className="buy-price">
               {stock > 0 ? (
                 <Price now={price} was={was} off={off} />
@@ -369,7 +380,7 @@ export default function ProductDetail() {
               ) : null}
             </div>
 
-            <div className="row" style={{ gap: 12, marginTop: 18, flexWrap: 'wrap' }}>
+            <div className="row buy-actions">
               <div className="qty">
                 <button
                   onClick={() => setQuantity((value) => Math.max(1, value - 1))}
@@ -394,15 +405,14 @@ export default function ProductDetail() {
                 onClick={addToCart}
                 disabled={!canBuy}
                 loading={adding}
-                style={{ flex: 1, minWidth: 190 }}
+                className="buy-cta"
               >
                 <ShoppingCart size={18} />
                 افزودن به سبد خرید
               </Button>
 
               <button
-                className="icon-btn"
-                style={{ width: 46, height: 46 }}
+                className="icon-btn buy-wish"
                 data-active={wishlist.has(product.id)}
                 onClick={() => wishlist.toggle(product.id)}
                 aria-label="علاقه‌مندی"
@@ -422,7 +432,7 @@ export default function ProductDetail() {
             ) : null}
           </div>
 
-          <div className="grid auto-grid" style={{ marginTop: 16 }}>
+          <div className="grid auto-grid pdp-trust" style={{ marginTop: 16 }}>
             {[
               { icon: Truck, title: 'ارسال سریع', sub: 'به سراسر ایران' },
               { icon: ShieldCheck, title: 'ضمانت اصالت', sub: 'کالای اورجینال' },
@@ -519,7 +529,7 @@ export default function ProductDetail() {
                     </select>
                   </div>
                   <textarea
-                    name="text"
+                    name="comment"
                     className="textarea"
                     placeholder="تجربه‌تان از این کالا را بنویسید…"
                     required
@@ -546,7 +556,7 @@ export default function ProductDetail() {
                       <Stars value={comment.rate} />
                     </div>
                     <p className="small" style={{ marginTop: 6 }}>
-                      {comment.text}
+                      {comment.comment}
                     </p>
                   </div>
                 ))
@@ -568,6 +578,32 @@ export default function ProductDetail() {
           </div>
         </section>
       ) : null}
+
+      <div className="mobile-bar" data-hidden={buyBoxVisible} aria-hidden={buyBoxVisible}>
+        <div className="mobile-bar-info">
+          {stock > 0 ? (
+            <Price now={price} was={was} off={off} />
+          ) : (
+            <span className="small strong" style={{ color: 'var(--danger-600)' }}>
+              {needsChoice ? 'یک گزینه انتخاب کنید' : 'ناموجود'}
+            </span>
+          )}
+        </div>
+        <Button
+          variant="primary"
+          onClick={
+            needsChoice
+              ? () => buyBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              : addToCart
+          }
+          disabled={!needsChoice && !canBuy}
+          loading={adding}
+          tabIndex={buyBoxVisible ? -1 : 0}
+        >
+          <ShoppingCart size={17} />
+          {needsChoice ? 'انتخاب گزینه' : canBuy ? 'افزودن به سبد' : 'ناموجود'}
+        </Button>
+      </div>
     </div>
   );
 }

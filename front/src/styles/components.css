@@ -127,16 +127,14 @@
   border-top: 1px solid var(--line);
 }
 
+/* The bar wraps rather than scrolls. A scrolling container clips anything
+   absolutely positioned inside it, so with overflow-x:auto here every
+   category dropdown opened into an invisible box under the bar. */
 .nav-list {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.nav-list::-webkit-scrollbar {
-  display: none;
 }
 
 .nav-item {
@@ -213,6 +211,15 @@
 
 .burger {
   display: none;
+}
+
+/* The phone search row; the header-top search takes over on wider screens. */
+.header-search {
+  display: none;
+}
+
+.header-search .search {
+  max-width: none;
 }
 
 /* ===========================================================
@@ -311,19 +318,22 @@
 
 .hero-dots {
   position: absolute;
-  bottom: 18px;
+  bottom: 10px;
   inset-inline-start: 50%;
   transform: translateX(50%);
   display: flex;
-  gap: 7px;
 }
 
+/* An 8px dot is drawn, but the padding around it is what a thumb hits. */
 .hero-dot {
+  box-sizing: content-box;
   width: 8px;
   height: 8px;
+  padding: 8px 4px;
   border-radius: 50%;
   border: none;
   background: rgba(10, 27, 61, 0.22);
+  background-clip: content-box;
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -824,7 +834,19 @@
   flex-wrap: wrap;
 }
 
+.sort-label {
+  align-self: center;
+  margin-inline-end: 6px;
+  white-space: nowrap;
+}
+
+.toolbar-count {
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
 .sort-tab {
+  white-space: nowrap;
   padding: 7px 13px;
   border-radius: var(--radius-pill);
   border: none;
@@ -1036,6 +1058,22 @@
 
 .buy-price .price-now {
   font-size: 24px;
+}
+
+.buy-actions {
+  gap: 12px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.buy-cta {
+  flex: 1;
+  min-width: 190px;
+}
+
+.buy-wish {
+  width: 46px;
+  height: 46px;
 }
 
 .spec-table {
@@ -1322,6 +1360,48 @@
   box-shadow: var(--shadow-xs);
 }
 
+/* Support tickets: the customer's own messages sit on the start side,
+   support's answers on the end side, so the conversation reads at a glance. */
+.ticket-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ticket-msg {
+  align-self: flex-end;
+  max-width: min(88%, 640px);
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  border-start-end-radius: 4px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.ticket-msg[data-own='true'] {
+  align-self: flex-start;
+  border-color: var(--brand-100);
+  border-radius: var(--radius);
+  border-start-start-radius: 4px;
+  background: var(--brand-50);
+  box-shadow: none;
+}
+
+.ticket-msg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+.ticket-msg-body {
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .timeline {
   display: flex;
   align-items: center;
@@ -1554,6 +1634,87 @@
 }
 
 /* ===========================================================
+   Drawer - the phone menu and the listing filters
+   =========================================================== */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 21, 38, 0.45);
+  z-index: 90;
+  animation: fadeIn 0.2s ease both;
+}
+
+/* Opens from the side the burger sits on. */
+.drawer {
+  position: fixed;
+  top: 0;
+  inset-inline-start: 0;
+  height: 100%;
+  height: 100dvh;
+  width: min(88vw, 340px);
+  background: var(--surface);
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+  animation: drawerIn 0.25s ease both;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px;
+}
+
+.drawer-foot {
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+/* Inside the drawer the filter panel is plain content - the drawer is the
+   one thing that scrolls, not a sticky box nested inside it. */
+.drawer .filters {
+  position: static;
+  max-height: none;
+  overflow: visible;
+  padding: 4px;
+}
+
+@keyframes drawerIn {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+[dir='rtl'] .drawer {
+  animation-name: drawerInRtl;
+}
+
+@keyframes drawerInRtl {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+/* ===========================================================
+   Phone bottom bar - add to cart, continue, place order
+   =========================================================== */
+.mobile-bar {
+  display: none;
+}
+
+/* ===========================================================
    Responsive
    =========================================================== */
 @media (max-width: 1024px) {
@@ -1589,6 +1750,53 @@
   .filters-toggle {
     display: inline-flex;
   }
+  /* Hover menus mean nothing to a finger, so touch-sized screens get the
+     drawer instead of the dropdown bar. */
+  .nav-desktop {
+    display: none;
+  }
+  .burger {
+    display: inline-flex;
+  }
+  /* The account menu was a 550px column stacked on top of every account
+     page - orders, tickets, the wallet all started below the fold. It is
+     one scrolling row of tabs here instead. */
+  .account-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 6px;
+    gap: 6px;
+  }
+  .account-nav::-webkit-scrollbar {
+    display: none;
+  }
+  .account-nav .account-user {
+    display: none;
+  }
+  .account-nav .account-link {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 8px 13px;
+    font-size: 13px;
+    border-radius: var(--radius-pill);
+  }
+  .account-nav .account-link.is-active {
+    background: var(--brand-700);
+    color: #fff;
+  }
+  /* Sort options: one swipeable row under the filter button, not two
+     wrapped rows pushing the products down. */
+  .sort-tabs {
+    order: 3;
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .sort-tabs::-webkit-scrollbar {
+    display: none;
+  }
   .footer-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -1596,10 +1804,28 @@
 
 @media (max-width: 760px) {
   :root {
-    --header-height: 64px;
+    --header-height: 118px;
   }
-  .account-nav .row {
-    flex-wrap: wrap;
+  .page {
+    padding-block: 16px 40px;
+  }
+  .section {
+    margin-top: 28px;
+  }
+  .section-title {
+    font-size: 17px;
+  }
+  .card-pad {
+    padding: 16px;
+  }
+
+  /* ---------- header ---------- */
+  .header-top {
+    gap: 10px;
+    padding-block: 10px;
+  }
+  .logo-mark {
+    font-size: 21px;
   }
   /* Three labelled actions need 181px and will not shrink, which pushed the
      whole page sideways under 360px and wrapped every label onto two lines.
@@ -1613,34 +1839,93 @@
   .header-actions {
     gap: 2px;
   }
+  .search-desktop {
+    display: none;
+  }
+  .header-search {
+    display: block;
+    padding-bottom: 10px;
+  }
+  .search input {
+    padding-block: 10px;
+  }
+
+  /* ---------- home ---------- */
+  .hero {
+    min-height: 0;
+  }
   .hero-slide {
     grid-template-columns: 1fr;
-    padding: 28px 24px;
+    gap: 4px;
+    padding: 18px 18px 44px;
     text-align: center;
   }
   .hero-art {
-    min-height: 150px;
+    min-height: 120px;
     order: -1;
   }
   .hero-art .glow {
-    width: 190px;
-    height: 190px;
+    width: 150px;
+    height: 150px;
   }
   .hero-art img {
-    max-height: 165px;
+    max-height: 128px;
   }
-  .nav-list {
-    gap: 0;
+  .hero-art .placeholder-art {
+    width: 92px;
+    height: 122px;
+    border-radius: 20px;
   }
-  .burger {
-    display: inline-flex;
+  .hero-eyebrow {
+    margin-bottom: 4px;
+    font-size: 12px;
   }
-  .nav-desktop {
+  .hero-title {
+    font-size: 23px;
+  }
+  .hero-sub {
+    margin: 6px auto 0;
+    font-size: 13px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .hero-cta {
+    margin-top: 14px;
+    padding: 11px 22px;
+    font-size: 14px;
+  }
+  /* A swipe moves the slider on a phone; the arrows only covered it. */
+  .hero-nav {
     display: none;
   }
   .tiles {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
   }
+  .tile {
+    gap: 8px;
+    padding: 12px 8px;
+  }
+  .tile-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+  .trust {
+    margin-top: 12px;
+  }
+  .trust-item {
+    gap: 9px;
+    padding: 12px;
+  }
+  .trust-title {
+    font-size: 12.5px;
+  }
+
+  /* ---------- product cards ---------- */
   .product-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
@@ -1658,7 +1943,7 @@
     min-height: 43px;
   }
   .pp-amount {
-    font-size: 16.5px;
+    font-size: 16px;
   }
   /* 5 stars + the score is a 96px nowrap strip; below 360px the card is
      narrower than that, so drop to the score alone. */
@@ -1666,10 +1951,71 @@
     font-size: 11px;
   }
   .product-cta {
-    height: 37px;
+    height: 38px;
     font-size: 12px;
     margin-top: 7px;
   }
+  .wish-btn {
+    top: 6px;
+    inset-inline-end: 6px;
+    width: 34px;
+    height: 34px;
+  }
+
+  /* ---------- listing ---------- */
+  .toolbar {
+    gap: 8px 10px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .sort-label {
+    display: none;
+  }
+
+  /* ---------- product page ---------- */
+  .gallery-main {
+    padding: 16px;
+    border-radius: var(--radius);
+  }
+  .gallery-thumb {
+    width: 58px;
+    height: 58px;
+  }
+  .pdp-title {
+    font-size: 18px;
+  }
+  .buy-box {
+    padding: 16px;
+  }
+  /* Quantity and wishlist share the first row; the buy button gets the
+     full width under them instead of wrapping its label onto two lines. */
+  .buy-actions .buy-cta {
+    order: 3;
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  .buy-actions .buy-wish {
+    margin-inline-start: auto;
+  }
+  .pdp-trust {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .pdp-trust > .card-pad {
+    padding: 12px;
+  }
+  .spec-table td {
+    padding: 10px 12px;
+  }
+  .spec-table td:first-child {
+    width: 40%;
+  }
+  .tab {
+    padding: 11px 14px;
+    font-size: 13.5px;
+  }
+
+  /* ---------- cart ---------- */
   .cart-line {
     grid-template-columns: 72px minmax(0, 1fr);
   }
@@ -1680,47 +2026,101 @@
     width: 72px;
     height: 72px;
   }
+  /* The line total gets a row of its own instead of squeezing under the
+     72px thumbnail. */
+  .cart-line > :last-child {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  /* ---------- account ---------- */
+  .order-card {
+    padding: 14px;
+  }
+  .order-card.spread,
+  .order-card > .spread {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  /* ---------- sign in ---------- */
+  .auth-wrap {
+    min-height: 0;
+    padding-block: 12px;
+  }
+  .auth-card {
+    padding: 22px 18px;
+    box-shadow: none;
+  }
+
+  /* ---------- footer ---------- */
+  .footer {
+    margin-top: 36px;
+    padding-block: 32px 20px;
+  }
   .footer-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px 16px;
   }
-  .search-desktop {
-    display: none;
+  .footer-grid > :first-child {
+    grid-column: 1 / -1;
   }
-}
-
-.drawer-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(10, 21, 38, 0.45);
-  z-index: 90;
-  animation: fadeIn 0.2s ease both;
-}
-
-.drawer {
-  position: fixed;
-  top: 0;
-  inset-inline-end: 0;
-  height: 100%;
-  width: min(86vw, 320px);
-  background: var(--surface);
-  z-index: 95;
-  padding: 18px;
-  overflow-y: auto;
-  animation: slideIn 0.25s ease both;
-}
-
-@keyframes slideIn {
-  from {
-    transform: translateX(-100%);
+  .footer-bottom {
+    flex-direction: column;
+    gap: 6px;
   }
-}
 
-[dir='rtl'] .drawer {
-  animation-name: slideInRtl;
-}
+  /* ---------- toasts ---------- */
+  .toasts {
+    inset-inline: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    max-width: none;
+  }
 
-@keyframes slideInRtl {
-  from {
-    transform: translateX(100%);
+  /* ---------- bottom bar ---------- */
+  .mobile-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 55;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -8px 24px rgba(13, 21, 38, 0.08);
+    transition:
+      transform 0.25s ease,
+      visibility 0.25s ease;
+  }
+  .mobile-bar[data-hidden='true'] {
+    transform: translateY(110%);
+    visibility: hidden;
+  }
+  .mobile-bar-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.5;
+  }
+  .mobile-bar-info .price {
+    flex-wrap: wrap;
+    gap: 2px 6px;
+  }
+  .mobile-bar-info .price-now {
+    font-size: 16px;
+  }
+  .mobile-bar .btn {
+    flex-shrink: 0;
+    padding: 12px 18px;
+  }
+  /* Room for the bar, so it never sits on the last thing on the page. */
+  body:has(.mobile-bar) .footer {
+    padding-bottom: 96px;
+  }
+  body:has(.mobile-bar[data-hidden='false']) .toasts {
+    bottom: calc(84px + env(safe-area-inset-bottom));
   }
 }

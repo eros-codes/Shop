@@ -76,7 +76,7 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
       title={
         loading
           ? 'در حال بارگذاری…'
-          : `سفارش ${order?.invoice_number ?? `#${orderId}`}`
+          : `سفارش ⁨${order?.invoice_number ?? `#${orderId}`}⁩`
       }
       onClose={onClose}
       footer={

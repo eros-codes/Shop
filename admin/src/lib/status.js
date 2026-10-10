@@ -52,3 +52,27 @@ export const PAYMENT_METHODS = {
   zarinpal: 'درگاه اینترنتی',
   cash_on_delivery: 'پرداخت در محل',
 };
+
+// "Open" means the customer is waiting on support: the API moves a ticket
+// back to open whenever the customer writes, and to answered when support
+// replies.
+export const TICKET_STATUS = {
+  open: { label: 'در انتظار پاسخ', tone: 'warning' },
+  answered: { label: 'پاسخ داده شده', tone: 'success' },
+  closed: { label: 'بسته شده', tone: 'muted' },
+};
+
+// The storefront files a ticket under one of these keys. Anything else - a
+// ticket opened straight through the API - is shown as it was written.
+export const TICKET_SUBJECTS = {
+  order: 'پیگیری سفارش',
+  payment: 'پرداخت و کیف پول',
+  return: 'مرجوعی و ضمانت',
+  product: 'سؤال درباره‌ی کالا',
+  account: 'حساب کاربری',
+  other: 'سایر موارد',
+};
+
+export function ticketSubject(value) {
+  return TICKET_SUBJECTS[value] ?? value ?? '—';
+}

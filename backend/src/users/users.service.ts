@@ -381,8 +381,14 @@ export class UsersService {
 
     return this.basketItemRepository.find({
       where: { user: { id: user_id } },
-      relations: { product: true, variant: true },
-      order: { created_at: 'ASC', id: 'ASC' },
+      // The images come along so the basket can show what is in it - the
+      // cart and checkout drew an empty frame for every line without them.
+      relations: { product: { images: true }, variant: true },
+      order: {
+        created_at: 'ASC',
+        id: 'ASC',
+        product: { images: { order: 'ASC' } },
+      },
     });
   }
 

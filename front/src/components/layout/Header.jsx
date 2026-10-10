@@ -8,9 +8,9 @@ import {
   Search,
   ShoppingCart,
   User,
-  X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { Drawer } from '../ui/Primitives';
 import { useCart } from '../../context/CartContext';
 import { useCatalog } from '../../context/CatalogContext';
 import { useWishlist } from '../../context/WishlistContext';
@@ -94,6 +94,24 @@ export default function Header() {
         </div>
       </div>
 
+      {/* On a phone the search box gets a row of its own - it is what most
+          visitors reach for first, and it used to be hidden in the menu. */}
+      <div className="container header-search">
+        <form className="search" onSubmit={submit} role="search">
+          <input
+            type="search"
+            enterKeyHint="search"
+            value={term}
+            onChange={(event) => setTerm(event.target.value)}
+            placeholder="جستجو در تل‌کال…"
+            aria-label="جستجوی کالا"
+          />
+          <button type="submit" aria-label="جستجو">
+            <Search size={17} />
+          </button>
+        </form>
+      </div>
+
       <nav className="nav nav-desktop">
         <div className="container">
           <ul className="nav-list">
@@ -151,57 +169,36 @@ export default function Header() {
       </nav>
 
       {menuOpen ? (
-        <>
-          <div className="drawer-backdrop" onClick={() => setMenuOpen(false)} />
-          <aside className="drawer">
-            <div className="spread" style={{ marginBottom: 16 }}>
-              <span className="strong">دسته‌بندی‌ها</span>
-              <button className="icon-btn" onClick={() => setMenuOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-
-            <form className="search" onSubmit={submit} style={{ marginBottom: 18 }}>
-              <input
-                value={term}
-                onChange={(event) => setTerm(event.target.value)}
-                placeholder="جستجو…"
-              />
-              <button type="submit" aria-label="جستجو">
-                <Search size={16} />
-              </button>
-            </form>
-
-            <div className="stack" style={{ gap: 2 }}>
-              {categories.map((category) => (
-                <div key={category.id}>
-                  <Link
-                    className="account-link"
-                    to={`/products?categoryId=${category.id}`}
-                  >
-                    {category.title}
-                  </Link>
-                  {(category.children ?? []).map((child) => (
-                    <Link
-                      key={child.id}
-                      className="account-link small"
-                      style={{ paddingInlineStart: 28 }}
-                      to={`/products?categoryId=${child.id}`}
-                    >
-                      {child.title}
-                    </Link>
-                  ))}
-                </div>
-              ))}
-              <div className="divider" />
-              {QUICK_LINKS.map((link) => (
-                <Link key={link.to} className="account-link" to={link.to}>
-                  {link.label}
+        <Drawer title="دسته‌بندی‌ها" onClose={() => setMenuOpen(false)}>
+          <div className="stack" style={{ gap: 2 }}>
+            {categories.map((category) => (
+              <div key={category.id}>
+                <Link
+                  className="account-link strong"
+                  to={`/products?categoryId=${category.id}`}
+                >
+                  {category.title}
                 </Link>
-              ))}
-            </div>
-          </aside>
-        </>
+                {(category.children ?? []).map((child) => (
+                  <Link
+                    key={child.id}
+                    className="account-link"
+                    style={{ paddingInlineStart: 28 }}
+                    to={`/products?categoryId=${child.id}`}
+                  >
+                    {child.title}
+                  </Link>
+                ))}
+              </div>
+            ))}
+            <div className="divider" />
+            {QUICK_LINKS.map((link) => (
+              <Link key={link.to} className="account-link" to={link.to}>
+                {link.label}
+              </Link>
+            ))}
+          </div>
+        </Drawer>
       ) : null}
     </header>
   );

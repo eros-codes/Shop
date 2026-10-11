@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the tellcall database and uploaded images
+After=mysql.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/tellcall/deploy/scripts/backup.sh
+# In the background: the shop keeps the disk and CPU it needs.
+Nice=10
+IOSchedulingClass=idle
+# Logs: journalctl -u tellcall-backup

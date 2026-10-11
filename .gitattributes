@@ -1,0 +1,5 @@
+# Server files run on Linux: a Windows checkout must not give them CRLF
+# line endings, or bash fails on the first line ("$'\r': command not found")
+# when they are uploaded instead of cloned.
+*.sh text eol=lf
+deploy/** text eol=lf

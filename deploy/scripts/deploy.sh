@@ -28,6 +28,17 @@ fi
 echo "==> Backend: install and build"
 as_app "cd $APP_DIR/backend && npm ci --no-audit --no-fund && npm run build"
 
+# A migration that goes wrong cannot be taken back - the copy taken just
+# before it can. SKIP_BACKUP=1 deploys without one (say, the disk is full
+# and this release is the fix).
+echo "==> Backing up the database before migrating"
+if [[ ${SKIP_BACKUP:-} == 1 ]]; then
+  echo "    skipped (SKIP_BACKUP=1)"
+elif ! "$APP_DIR/deploy/scripts/backup.sh" --label pre-deploy --db-only; then
+  echo "The backup failed, so nothing was migrated. Fix it, or SKIP_BACKUP=1 to deploy anyway." >&2
+  exit 1
+fi
+
 echo "==> Backend: database migrations"
 # Production never syncs the schema on its own, so this step is the only
 # thing that brings the database up to date.

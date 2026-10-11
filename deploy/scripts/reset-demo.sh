@@ -11,7 +11,12 @@ ENV_FILE=/etc/tellcall/backend.env
 APP_USER=tellcall
 
 [[ $EUID -eq 0 ]] || { echo "Run as root." >&2; exit 1; }
-set -a; . "$ENV_FILE"; set +a
+set -a
+# shellcheck source=/dev/null
+. "$ENV_FILE"
+set +a
+# shellcheck source=lib/backup-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/backup-common.sh"
 
 # The single guard that matters: this script drops the whole database.
 if [[ ${DEMO_MODE:-} != "true" ]]; then
@@ -37,6 +42,9 @@ restart_api() {
   fi
 }
 trap restart_api EXIT
+
+# Not while a backup is reading the database this is about to drop.
+take_db_lock
 
 echo "==> Stopping the API"
 systemctl stop tellcall-api

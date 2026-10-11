@@ -85,7 +85,8 @@ fi
 take_db_lock
 
 api_stopped=false
-# shellcheck disable=SC2329  # run by the EXIT trap
+# Run by the EXIT trap. (ShellCheck 0.11 calls this SC2329, older ones SC2317.)
+# shellcheck disable=SC2317,SC2329
 restart_api() {
   if $api_stopped; then
     echo "==> Starting the API"

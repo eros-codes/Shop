@@ -326,6 +326,23 @@ The e2e suite refuses to run unless `DB_DATABASE` ends with `_test`
 (and `NODE_ENV` isn't `production`) - it writes real rows, so it must
 never be pointed at a working database by accident.
 
+The storefront and the admin panel have browser tests of their own in
+`e2e/` (Playwright). They start the API, both web apps and a freshly
+seeded database by themselves:
+
+```bash
+cd e2e && npm ci && npx playwright install chromium
+npx playwright test               # E2E_BROWSER_CHANNEL=chrome to use an installed Chrome
+```
+
+They cover what a person actually does: browsing as a guest, the basket,
+checkout and paying from the wallet, cancelling an order; and in the
+panel, cash on delivery from confirmation to a parcel refused at the
+door, the printable invoice, wallet charges and withdrawals, accounts
+made by staff, product pictures, discount codes and shipping zones. The
+database they use (`tellcall_e2e_test`) is dropped and seeded again at
+the start of every run.
+
 ## Demo data
 
 ```bash
@@ -361,9 +378,11 @@ keep in sync with the code. In production the docs are off unless
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request: `npm
-ci`, type-check, lint, the unit tests, and the e2e suites against a
-MySQL service container. The things that actually broke during
+`.github/workflows/ci.yml` runs on every push and pull request: for the
+API, lint, type-check, the unit tests and the e2e suites against a MySQL
+service container; for the storefront and the panel, lint and a
+production build; ShellCheck over the server scripts (and a check that
+they are stored executable); and the browser tests above. The things that actually broke during
 development here - a column TypeORM could not map, a migration that only
 worked on an empty database, a query that compiled but named a column
 wrong - all surface in one of those steps rather than in production.

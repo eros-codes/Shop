@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { Loader2, PackageSearch, WifiOff, X } from 'lucide-react';
-import { formatToman } from '../../lib/format';
+import { formatToman, toPersianDigits } from '../../lib/format';
 
 /**
  * A side sheet for phones: the category menu, the listing filters.
@@ -95,7 +95,7 @@ export function Field({ label, error, hint, children, id }) {
 export function Price({ now, was, off, size }) {
   return (
     <div className="price">
-      {off > 0 ? <span className="price-off">٪{off}</span> : null}
+      {off > 0 ? <span className="price-off">٪{toPersianDigits(off)}</span> : null}
       <span className="price-now" style={size ? { fontSize: size } : undefined}>
         {formatToman(now)}
       </span>

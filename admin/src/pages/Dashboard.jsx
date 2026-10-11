@@ -3,13 +3,17 @@ import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
+  ClipboardCheck,
+  Headphones,
+  MessageSquare,
   Package,
   RotateCcw,
   ShoppingBag,
   TrendingUp,
   Wallet,
+  WifiOff,
 } from 'lucide-react';
-import { api } from '../lib/api';
+import { api, toPage } from '../lib/api';
 import { formatToman } from '../lib/format';
 import { EmptyState } from '../components/Primitives';
 import SalesChart from '../components/SalesChart';
@@ -42,9 +46,26 @@ export default function Dashboard() {
   const [top, setTop] = useState([]);
   const [lowStock, setLowStock] = useState([]);
   const [returns, setReturns] = useState([]);
+  const [returnsWaiting, setReturnsWaiting] = useState(0);
+  const [openTickets, setOpenTickets] = useState(0);
+  const [pendingReviews, setPendingReviews] = useState(0);
+  // The figures failed to load. The cards used to show zeros instead -
+  // "no sales today" - with nothing to say the panel could not ask.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    api.get('/reports/summary', { auth: true }).then(setSummary).catch(() => {});
+    api
+      .get('/reports/summary', { auth: true })
+      .then(setSummary)
+      .catch(() => setFailed(true));
+    api
+      .get('/tickets?status=open&limit=1', { auth: true })
+      .then((data) => setOpenTickets(data?.total ?? 0))
+      .catch(() => {});
+    api
+      .get('/comments?status=pending&limit=1', { auth: true })
+      .then((data) => setPendingReviews(toPage(data, 1).total))
+      .catch(() => {});
     api
       .get('/reports/sales?granularity=day', { auth: true })
       .then(setSales)
@@ -59,15 +80,63 @@ export default function Dashboard() {
       .catch(() => {});
     api
       .get('/returns?status=requested&limit=5', { auth: true })
-      .then((data) => setReturns(data?.items ?? []))
+      .then((data) => {
+        setReturns(data?.items ?? []);
+        setReturnsWaiting(data?.total ?? 0);
+      })
       .catch(() => {});
   }, []);
 
   const periods = (sales?.periods ?? []).slice(-14);
   const byStatus = summary?.ordersByStatus ?? {};
 
+  // The day's work, each with a link straight to it: cash-on-delivery
+  // orders to confirm, paid orders to prepare, customers waiting on an
+  // answer, reviews to approve, returns to look at.
+  const todo = [
+    {
+      icon: ClipboardCheck,
+      label: 'سفارش در انتظار تأیید',
+      count: byStatus.pending ?? 0,
+      to: '/orders?status=pending',
+    },
+    {
+      icon: ShoppingBag,
+      label: 'سفارش پرداخت‌شده برای آماده‌سازی',
+      count: byStatus.paid ?? 0,
+      to: '/orders?status=paid',
+    },
+    { icon: Headphones, label: 'تیکت در انتظار پاسخ', count: openTickets, to: '/tickets?status=open' },
+    { icon: MessageSquare, label: 'نظر در انتظار تأیید', count: pendingReviews, to: '/comments' },
+    { icon: RotateCcw, label: 'درخواست مرجوعی', count: returnsWaiting, to: '/returns' },
+  ].filter((item) => item.count > 0);
+
   return (
     <div className="stack" style={{ gap: 16 }}>
+      {failed ? (
+        <div className="card card-pad row small" style={{ gap: 8, color: 'var(--danger-600)' }}>
+          <WifiOff size={16} />
+          آمار فروش بارگذاری نشد؛ عددهای زیر واقعی نیستند. صفحه را دوباره باز کنید.
+        </div>
+      ) : null}
+
+      {todo.length > 0 ? (
+        <section className="card card-pad">
+          <div className="card-title" style={{ fontSize: 14, marginBottom: 10 }}>
+            نیاز به اقدام
+          </div>
+          <div className="todo-grid">
+            {todo.map((item) => (
+              <Link key={item.to} to={item.to} className="todo-item">
+                <item.icon size={18} />
+                <span className="todo-count">{item.count.toLocaleString('fa-IR')}</span>
+                <span className="small">{item.label}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <div className="grid cols-4">
         <Stat
           icon={TrendingUp}
@@ -174,7 +243,12 @@ export default function Dashboard() {
               <p className="small muted">همه‌چیز موجود است.</p>
             ) : (
               lowStock.map((item) => (
-                <div className="spread" key={item.variantId}>
+                <Link
+                  className="spread"
+                  key={item.variantId}
+                  to={`/products?edit=${item.productId}`}
+                  title="ویرایش موجودی"
+                >
                   <span className="small" style={{ maxWidth: '62%' }}>
                     {item.productTitle}
                     <span className="muted"> — {item.variantTitle}</span>
@@ -184,7 +258,7 @@ export default function Dashboard() {
                   >
                     {item.stock.toLocaleString('fa-IR')} عدد
                   </span>
-                </div>
+                </Link>
               ))
             )}
           </div>

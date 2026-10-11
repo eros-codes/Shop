@@ -30,6 +30,7 @@ import {
 } from '../common/cache/catalog-cache.service';
 import { AuditService } from '../audit/audit.service';
 import { ErrorCodes } from '../common/errors/error-codes';
+import { AppError } from '../common/errors/app-error';
 
 const mockRepo = () => ({
   findOneBy: jest.fn(),
@@ -46,6 +47,7 @@ const mockRepo = () => ({
   increment: jest.fn(),
   update: jest.fn().mockResolvedValue({ affected: 1 }),
   count: jest.fn().mockResolvedValue(0),
+  findAndCount: jest.fn().mockResolvedValue([[], 0]),
   createQueryBuilder: jest.fn(),
 });
 
@@ -143,6 +145,7 @@ describe('OrdersService', () => {
 
     const mockDataSource = {
       transaction: jest.fn((cb: any) => cb(mockManager)),
+      manager: mockManager,
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -1276,6 +1279,271 @@ describe('OrdersService', () => {
       expect(saved.shipping_cost).toBe(0);
       expect(saved.shipping_method_title).toBeUndefined();
       expect(saved.total_price).toBe(200);
+    });
+  });
+
+  // The panel's search box. It used to filter only the twenty orders on
+  // screen; an order on another page was "not found".
+  describe('findAll - search', () => {
+    it('finds an order by id, invoice number or customer mobile, across all pages', async () => {
+      await service.findAll(1, { page: 2, limit: 20, search: '۱۲۳' }, true);
+
+      const { where, skip } = orderRepo.findAndCount.mock.calls[0][0];
+      expect(skip).toBe(20);
+      expect(where).toHaveLength(3);
+      expect(where[0].invoice_number.value).toBe('%123%');
+      expect(where[1].id).toBe(123);
+      expect(where[2].user.mobile.value).toBe('%123%');
+    });
+
+    it("keeps a customer's search inside their own orders", async () => {
+      await service.findAll(7, { page: 1, limit: 20, search: 'INV' }, false);
+
+      const { where } = orderRepo.findAndCount.mock.calls[0][0];
+      expect(where).toHaveLength(1);
+      expect(where[0]).toMatchObject({ user: { id: 7 } });
+    });
+
+    it('treats % and _ as text, not wildcards', async () => {
+      await service.findAll(1, { page: 1, limit: 20, search: '50%_off' }, true);
+
+      const { where } = orderRepo.findAndCount.mock.calls[0][0];
+      expect(where[0].invoice_number.value).toBe('%50\\%\\_off%');
+    });
+  });
+
+  // What checkout shows before the customer pays. It used to estimate the
+  // total itself - tax guessed at 10%, a discount code's effect unknown -
+  // and a wallet order then took whatever the server worked out.
+  describe('quote', () => {
+    const quoteDto = { addressId: 1, items: [{ productId: 1, quantity: 2 }] };
+    const setUpQuote = () => {
+      addressRepo.findOne.mockResolvedValue({
+        id: 1,
+        province: 'تهران',
+        user: { id: 7 },
+      });
+      productRepo.find.mockResolvedValue([{ ...product }]);
+      shippingService.priceForOrder.mockResolvedValue({
+        methodId: 3,
+        title: 'پیک',
+        cost: 30_000,
+        estimatedDaysMin: 1,
+        estimatedDaysMax: 1,
+      });
+      configService.get.mockImplementation((key: string) =>
+        key === 'TAX_RATE_PERCENT' ? '10' : undefined,
+      );
+    };
+
+    it('prices the basket exactly as placing it would', async () => {
+      setUpQuote();
+      discountCodesService.quoteForOrder.mockResolvedValue({
+        discount: { id: 3 },
+        amount: 100,
+      });
+
+      const quote = await service.quote(7, {
+        ...quoteDto,
+        discountCode: 'HALF',
+      });
+
+      expect(quote).toMatchObject({
+        items_total: 200,
+        discount_amount: 100,
+        shipping_cost: 30_000,
+        tax_amount: 10,
+        total_price: 100 + 30_000 + 10,
+        shippingMethodId: 3,
+        discount: { code: 'HALF', applied: true },
+      });
+    });
+
+    it('creates, reserves and locks nothing', async () => {
+      setUpQuote();
+
+      await service.quote(7, quoteDto);
+
+      expect(orderRepo.save).not.toHaveBeenCalled();
+      expect(variantRepo.save).not.toHaveBeenCalled();
+      expect(discountCodesService.consumeOne).not.toHaveBeenCalled();
+      for (const [options] of variantRepo.find.mock.calls) {
+        expect(options).not.toHaveProperty('lock');
+      }
+    });
+
+    it('prices without a code that does not apply, and says why', async () => {
+      setUpQuote();
+      discountCodesService.quoteForOrder.mockRejectedValue(
+        AppError.badRequest(ErrorCodes.DISCOUNT_EXPIRED, 'expired'),
+      );
+
+      const quote = await service.quote(7, {
+        ...quoteDto,
+        discountCode: 'OLD',
+      });
+
+      expect(quote.discount_amount).toBe(0);
+      expect(quote.total_price).toBe(200 + 30_000 + 20);
+      expect(quote.discount).toMatchObject({
+        code: 'OLD',
+        applied: false,
+        error: { code: ErrorCodes.DISCOUNT_EXPIRED },
+      });
+    });
+
+    it("will not price someone else's address", async () => {
+      addressRepo.findOne.mockResolvedValue({ id: 1, user: { id: 999 } });
+
+      await expect(service.quote(7, quoteDto)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('fails on stock the way placing the order would', async () => {
+      setUpQuote();
+
+      await expect(
+        service.quote(7, {
+          addressId: 1,
+          items: [{ productId: 1, quantity: 50 }],
+        }),
+      ).rejects.toMatchObject({ code: ErrorCodes.INSUFFICIENT_STOCK });
+    });
+  });
+
+  // The key's fingerprint is what tells a retry from a different order.
+  describe('create - idempotency fingerprint', () => {
+    it('treats another option of the same product as a different order', async () => {
+      const replayOf = async (dto: any) => {
+        ordersQb.getRawOne.mockResolvedValueOnce(undefined);
+        userRepo.findOneBy.mockResolvedValue({ id: 7 });
+        addressRepo.findOne.mockResolvedValue(address);
+        productRepo.find.mockResolvedValue([{ ...product }]);
+        await service.create(7, dto, 'idem-key-fp-1');
+        const calls = orderRepo.save.mock.calls;
+        return calls[calls.length - 1][0].idempotency_fingerprint;
+      };
+
+      const black = await replayOf({
+        addressId: 1,
+        payWithWallet: true,
+        items: [{ productId: 1, variantId: 11, quantity: 1 }],
+      });
+      variantRepo.find.mockImplementation(() =>
+        Promise.resolve([{ ...variant(), id: 12 }]),
+      );
+      const white = await replayOf({
+        addressId: 1,
+        payWithWallet: true,
+        items: [{ productId: 1, variantId: 12, quantity: 1 }],
+      });
+
+      expect(black).toBeTruthy();
+      expect(white).not.toBe(black);
+    });
+  });
+
+  // Cash on delivery is paid at the door. The status table was written for
+  // orders paid up front, so a COD order had to be marked paid before it
+  // could be prepared - and cancelling it then refunded money the shop
+  // never had.
+  describe('cash on delivery - the order lifecycle', () => {
+    const codOrder = (overrides: Record<string, unknown> = {}) => ({
+      id: 1,
+      status: OrderStatusEnum.Pending,
+      payment_method: PaymentMethodEnum.CashOnDelivery,
+      payed_time: null,
+      total_price: 500_000,
+      refunded_amount: 0,
+      user: { id: 7 },
+      items: [{ quantity: 2, product: { ...product }, variant: { id: 11 } }],
+      ...overrides,
+    });
+
+    it('goes from pending straight into preparation, without pretending to be paid', async () => {
+      orderRepo.findOne.mockResolvedValue(codOrder());
+
+      const result = await service.updateStatus(1, {
+        status: OrderStatusEnum.Processing,
+      });
+
+      expect(result.status).toBe(OrderStatusEnum.Processing);
+      expect(result.payed_time).toBeNull();
+    });
+
+    it('refunds nothing when an unpaid COD order is cancelled, and puts the stock back', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        codOrder({ status: OrderStatusEnum.Processing }),
+      );
+
+      await service.updateStatus(1, { status: OrderStatusEnum.Cancelled });
+
+      expect(walletsService.refund).not.toHaveBeenCalled();
+      expect(variantRepo.increment).toHaveBeenCalledWith(
+        { id: 11 },
+        'stock',
+        2,
+      );
+    });
+
+    it('can be called off from "sent" when the customer refuses the parcel', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        codOrder({ status: OrderStatusEnum.Sent }),
+      );
+
+      const result = await service.updateStatus(1, {
+        status: OrderStatusEnum.Cancelled,
+      });
+
+      expect(result.status).toBe(OrderStatusEnum.Cancelled);
+      expect(variantRepo.increment).toHaveBeenCalledWith(
+        { id: 11 },
+        'stock',
+        2,
+      );
+      expect(walletsService.refund).not.toHaveBeenCalled();
+    });
+
+    it('still refunds a COD order whose money was taken early', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        codOrder({ status: OrderStatusEnum.Paid, payed_time: new Date() }),
+      );
+
+      await service.updateStatus(1, { status: OrderStatusEnum.Cancelled });
+
+      expect(walletsService.refund).toHaveBeenCalledWith(
+        7,
+        500_000,
+        expect.any(String),
+        expect.anything(),
+      );
+    });
+
+    it('records the payment when the courier delivers', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        codOrder({ status: OrderStatusEnum.Sent }),
+      );
+
+      const result = await service.updateStatus(1, {
+        status: OrderStatusEnum.Delivered,
+      });
+
+      expect(result.payed_time).toBeInstanceOf(Date);
+    });
+
+    it('does not let a prepaid order be cancelled once it has shipped', async () => {
+      orderRepo.findOne.mockResolvedValue(
+        codOrder({
+          status: OrderStatusEnum.Sent,
+          payment_method: PaymentMethodEnum.Zarinpal,
+          payed_time: new Date(),
+        }),
+      );
+
+      await expect(
+        service.updateStatus(1, { status: OrderStatusEnum.Cancelled }),
+      ).rejects.toMatchObject({ code: ErrorCodes.INVALID_STATUS_TRANSITION });
     });
   });
 

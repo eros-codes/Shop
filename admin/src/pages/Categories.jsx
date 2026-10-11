@@ -6,18 +6,34 @@ import { translateError } from '../lib/errorMessages';
 import {
   Button,
   Confirm,
+  ConnectionError,
   EmptyState,
   Field,
   Modal,
   TableSkeleton,
 } from '../components/Primitives';
 
-function flatten(nodes, depth = 0, out = []) {
+// The tree as rows, each knowing its parent - the tree endpoint gives
+// children, not parents, and the edit form used to read a `parent` the rows
+// never had, so it always showed "no parent".
+function flatten(nodes, depth = 0, out = [], parentId = null) {
   (nodes ?? []).forEach((node) => {
-    out.push({ ...node, depth });
-    flatten(node.children, depth + 1, out);
+    out.push({ ...node, depth, parentId });
+    flatten(node.children, depth + 1, out, node.id);
   });
   return out;
+}
+
+// A category and everything under it: none of them can be its new parent.
+function subtreeIds(row) {
+  const ids = new Set([row.id]);
+  const walk = (nodes) =>
+    (nodes ?? []).forEach((node) => {
+      ids.add(node.id);
+      walk(node.children);
+    });
+  walk(row.children);
+  return ids;
 }
 
 export default function Categories() {
@@ -25,6 +41,7 @@ export default function Categories() {
   const [tree, setTree] = useState([]);
   const [attributes, setAttributes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState(null);
   const [removing, setRemoving] = useState(null);
   const [attributesFor, setAttributesFor] = useState(null);
@@ -38,10 +55,14 @@ export default function Categories() {
 
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     api
       .get('/categories/tree')
       .then((data) => setTree(data ?? []))
-      .catch(() => setTree([]))
+      .catch(() => {
+        setTree([]);
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
     api.get('/attributes').then(setAttributes).catch(() => {});
   }, []);
@@ -53,10 +74,13 @@ export default function Categories() {
   const save = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const parentId = form.get('parentId') ? Number(form.get('parentId')) : null;
     const payload = {
       title: form.get('title'),
       ...(form.get('slug') ? { slug: form.get('slug') } : {}),
-      ...(form.get('parentId') ? { parentId: Number(form.get('parentId')) } : {}),
+      // On an existing category "no parent" is sent as null, which moves it
+      // to the top level; left out, it stayed where it was.
+      ...(parentId !== null ? { parentId } : editing.id ? { parentId: null } : {}),
     };
     if (busyRef.current) return;
     busyRef.current = true;
@@ -121,7 +145,7 @@ export default function Categories() {
         { auth: true },
       );
       setLinks((current) => current.filter((link) => link.attribute.id !== attributeId));
-      toast.success('ویژگی جدا شd');
+      toast.success('ویژگی جدا شد');
     } catch (error) {
       toast.error(translateError(error));
     }
@@ -142,6 +166,8 @@ export default function Categories() {
       <section className="card">
         {loading ? (
           <TableSkeleton cols={3} />
+        ) : failed ? (
+          <ConnectionError onRetry={load} />
         ) : rows.length === 0 ? (
           <EmptyState icon={<FolderTree size={26} />} title="دسته‌بندی ثبت نشده است" />
         ) : (
@@ -211,11 +237,11 @@ export default function Categories() {
               <select
                 className="select"
                 name="parentId"
-                defaultValue={editing.parent?.id ?? ''}
+                defaultValue={editing.parentId ?? ''}
               >
                 <option value="">بدون والد (سطح اول)</option>
                 {rows
-                  .filter((row) => row.id !== editing.id)
+                  .filter((row) => !editing.id || !subtreeIds(editing).has(row.id))
                   .map((row) => (
                     <option key={row.id} value={row.id}>
                       {'— '.repeat(row.depth)}

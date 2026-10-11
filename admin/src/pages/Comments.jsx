@@ -5,9 +5,10 @@ import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { formatDate } from '../lib/format';
 import {
-  Button,
   Confirm,
+  ConnectionError,
   EmptyState,
+  Pagination,
   TableSkeleton,
 } from '../components/Primitives';
 
@@ -20,20 +21,35 @@ const STATUS = {
 export default function Comments() {
   const toast = useToast();
   const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [status, setStatus] = useState('pending');
   const [removing, setRemoving] = useState(null);
 
+  // Paged: a backlog of more than fifty waiting reviews never showed the
+  // rest.
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     api
-      .get(`/comments${buildQuery({ status: status || undefined, limit: 50 })}`, {
+      .get(`/comments${buildQuery({ status: status || undefined, page, limit: 30 })}`, {
         auth: true,
       })
-      .then((data) => setItems(toPage(data, 50).items))
-      .catch(() => setItems([]))
+      .then((data) => {
+        const result = toPage(data, 30);
+        setItems(result.items);
+        setTotal(result.total);
+        setTotalPages(result.totalPages);
+      })
+      .catch(() => {
+        setItems([]);
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
-  }, [status]);
+  }, [status, page]);
 
   useEffect(load, [load]);
 
@@ -67,7 +83,10 @@ export default function Comments() {
           className="select"
           style={{ width: 190 }}
           value={status}
-          onChange={(event) => setStatus(event.target.value)}
+          onChange={(event) => {
+            setStatus(event.target.value);
+            setPage(1);
+          }}
         >
           <option value="">همه نظرات</option>
           {Object.entries(STATUS).map(([value, meta]) => (
@@ -76,12 +95,14 @@ export default function Comments() {
             </option>
           ))}
         </select>
-        <span className="small muted">{items.length.toLocaleString('fa-IR')} نظر</span>
+        <span className="small muted">{total.toLocaleString('fa-IR')} نظر</span>
       </div>
 
       <section className="card">
         {loading ? (
           <TableSkeleton cols={5} />
+        ) : failed ? (
+          <ConnectionError onRetry={load} />
         ) : items.length === 0 ? (
           <EmptyState icon={<MessageSquare size={26} />} title="نظری در این وضعیت نیست" />
         ) : (
@@ -106,7 +127,7 @@ export default function Comments() {
                       <div className="tiny muted">{comment.user?.mobile}</div>
                     </td>
                     <td className="small">
-                      {comment.rate ? `${comment.rate} ★` : '—'}
+                      {comment.rate ? `${comment.rate.toLocaleString('fa-IR')} ★` : '—'}
                     </td>
                     <td className="small" style={{ maxWidth: 320 }}>
                       {comment.comment}
@@ -149,6 +170,7 @@ export default function Comments() {
             </table>
           </div>
         )}
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </section>
 
       {removing ? (

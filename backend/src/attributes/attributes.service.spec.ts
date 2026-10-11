@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { AttributesService } from './attributes.service';
 import { Attribute } from './entities/attribute.entity';
 import { AttributeOption } from './entities/attribute-option.entity';
@@ -110,13 +110,16 @@ describe('AttributesService', () => {
 
       await expect(
         service.update(1, { is_variant_axis: false }),
-      ).rejects.toThrow(ConflictException);
+      ).rejects.toMatchObject({ status: 409, code: 'ATTRIBUTE_IN_USE' });
     });
 
     it('will not delete one that variants are built on', async () => {
       variantValues.count.mockResolvedValue(2);
 
-      await expect(service.remove(1)).rejects.toThrow(ConflictException);
+      await expect(service.remove(1)).rejects.toMatchObject({
+        status: 409,
+        code: 'ATTRIBUTE_IN_USE',
+      });
       expect(attributes.softDelete).not.toHaveBeenCalled();
     });
   });

@@ -28,6 +28,13 @@ import { PaginatedResult } from '../common/interfaces/paginated-result.interface
 import { escapeLikePattern } from '../products/utils/product-search';
 import { toAsciiDigits } from '../common/validation/normalize';
 import { ErrorCodes } from '../common/errors/error-codes';
+import { isDuplicateEntryError } from '../common/database/mysql-errors';
+
+const mobileTaken = () =>
+  AppError.conflict(
+    ErrorCodes.MOBILE_ALREADY_REGISTERED,
+    'An account with this mobile number already exists',
+  );
 
 export const MAX_BASKET_LINES = 100;
 
@@ -44,18 +51,36 @@ export class UsersService {
     private readonly auditService: AuditService,
   ) {}
 
-  async create(createUserDto: CreateUserDto) {
+  // Staff creating an account from the panel. Recorded in the audit log -
+  // above all when it is another admin, which is as much access as a role
+  // change grants and that one was always logged.
+  async create(createUserDto: CreateUserDto, actor?: AuditActor) {
     const alreadyUser = await this.findOneByMobile(createUserDto.mobile);
-    if (alreadyUser)
-      throw new BadRequestException(
-        'User with this mobile number already exists',
-      );
+    if (alreadyUser) throw mobileTaken();
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
     const newUser = this.userRepository.create({
       ...createUserDto,
       password: hashedPassword,
     });
-    const saved = await this.userRepository.save(newUser);
+    let saved: User;
+    try {
+      saved = await this.userRepository.save(newUser);
+    } catch (error) {
+      // Registered in the moment between the check and the insert.
+      if (isDuplicateEntryError(error)) throw mobileTaken();
+      throw error;
+    }
+
+    await this.auditService.record({
+      action: 'user.created',
+      entityType: 'user',
+      entityId: saved.id,
+      actor,
+      changes: {
+        role: saved.role ?? createUserDto.role ?? userRoleEnum.NormalUser,
+      },
+    });
+
     return this.findOne(saved.id);
   }
 
@@ -196,10 +221,34 @@ export class UsersService {
 
   async updateRole(id: number, role: userRoleEnum, actor?: AuditActor) {
     await this.assertNotLockedDemoAccount(id);
+    // One click in the panel used to be enough to take an admin's rights
+    // away from themselves - or from the only admin there was, leaving a
+    // shop nobody could run without a shell on the server.
+    if (actor?.userId === id) {
+      throw new AppError(
+        ErrorCodes.CANNOT_CHANGE_OWN_ROLE,
+        'You cannot change your own role - ask another admin',
+        HttpStatus.FORBIDDEN,
+      );
+    }
     const before = await this.userRepository.findOne({
       select: { id: true, role: true },
       where: { id },
     });
+    if (
+      before?.role === userRoleEnum.AdminUser &&
+      role !== userRoleEnum.AdminUser
+    ) {
+      const admins = await this.userRepository.count({
+        where: { role: userRoleEnum.AdminUser },
+      });
+      if (admins <= 1) {
+        throw AppError.conflict(
+          ErrorCodes.LAST_ADMIN,
+          'This is the only admin - make someone else an admin first',
+        );
+      }
+    }
     const result = await this.userRepository.update({ id }, { role });
     if (result.affected === 0) {
       throw new NotFoundException(`Could not find user ${id}`);
@@ -240,6 +289,7 @@ export class UsersService {
     userId: number,
     productId: number,
     variantId?: number,
+    quantity = 1,
   ): Promise<BasketItem> {
     const basketItemId = await this.dataSource.transaction(async (manager) => {
       const product = await lockActiveProduct(
@@ -261,13 +311,25 @@ export class UsersService {
         userId,
         variant.id,
       );
-      const nextQuantity = (existing?.quantity ?? 0) + 1;
+      const nextQuantity = (existing?.quantity ?? 0) + quantity;
 
+      // The same code and details as checkout's stock refusal, so the
+      // storefront can say which option and how many are left - as a plain
+      // 400 it read "invalid request".
       if (nextQuantity > variant.stock) {
-        throw new BadRequestException(
+        throw AppError.badRequest(
+          ErrorCodes.INSUFFICIENT_STOCK,
           variant.stock > 0
             ? `Only ${variant.stock} of ${product.title} (${variant.title}) are in stock`
             : `${product.title} (${variant.title}) is out of stock`,
+          {
+            productId: product.id,
+            variantId: variant.id,
+            productTitle: product.title,
+            variantTitle: variant.title,
+            available: variant.stock,
+            requested: nextQuantity,
+          },
         );
       }
 
@@ -293,7 +355,7 @@ export class UsersService {
         user: { id: userId },
         product: { id: productId },
         variant: { id: variant.id },
-        quantity: 1,
+        quantity,
       });
       return Number(identifiers[0].id);
     });
@@ -368,10 +430,13 @@ export class UsersService {
     return { merged, skipped };
   }
 
+  // Takes `quantity` units off the line (one by default); a line that
+  // reaches zero is removed, so sending its whole quantity removes it.
   async removeProductFromBasket(
     userId: number,
     productId: number,
     variantId?: number,
+    quantity = 1,
   ): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
       await lockUserRow(manager, userId);
@@ -404,10 +469,10 @@ export class UsersService {
         throw new NotFoundException("Product doesn't exist in basket");
       }
 
-      if (existing.quantity > 1) {
+      if (existing.quantity > quantity) {
         await basketItems.update(
           { id: existing.id },
-          { quantity: existing.quantity - 1 },
+          { quantity: existing.quantity - quantity },
         );
       } else {
         await basketItems.delete({ id: existing.id });

@@ -10,6 +10,11 @@ import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
 import PaymentResult from './pages/PaymentResult';
 import NotFound from './pages/NotFound';
+import FavoritesPage from './pages/FavoritesPage';
+import ReturnPolicy from './pages/info/ReturnPolicy';
+import Terms from './pages/info/Terms';
+import Privacy from './pages/info/Privacy';
+import Contact from './pages/info/Contact';
 import AccountLayout from './pages/account/AccountLayout';
 import Dashboard from './pages/account/Dashboard';
 import Orders from './pages/account/Orders';
@@ -32,6 +37,11 @@ export default function App() {
         <Route path="product/:slug" element={<ProductDetail />} />
         <Route path="cart" element={<Cart />} />
         <Route path="checkout" element={<Checkout />} />
+        <Route path="favorites" element={<FavoritesPage />} />
+        <Route path="return-policy" element={<ReturnPolicy />} />
+        <Route path="terms" element={<Terms />} />
+        <Route path="privacy" element={<Privacy />} />
+        <Route path="contact" element={<Contact />} />
 
         <Route path="login" element={<Login />} />
         <Route path="register" element={<Register />} />

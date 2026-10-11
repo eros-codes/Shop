@@ -6,9 +6,22 @@
 const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const ACCESS_TOKEN_KEY = 'tellcall.accessToken';
 
-let accessToken = localStorage.getItem(ACCESS_TOKEN_KEY) || null;
+// Storage can refuse to work at all (private browsing on older Safari,
+// site data blocked). Read at import time without a guard, that threw and
+// the whole shop rendered as a blank page; now the session simply does
+// not outlive the tab.
+function readStoredToken() {
+  try {
+    return localStorage.getItem(ACCESS_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+let accessToken = readStoredToken() || null;
 let refreshPromise = null;
 const listeners = new Set();
+const tokenListeners = new Set();
 
 export function getAccessToken() {
   return accessToken;
@@ -16,11 +29,30 @@ export function getAccessToken() {
 
 export function setAccessToken(token) {
   accessToken = token ?? null;
-  if (token) {
-    localStorage.setItem(ACCESS_TOKEN_KEY, token);
-  } else {
-    localStorage.removeItem(ACCESS_TOKEN_KEY);
+  try {
+    if (token) localStorage.setItem(ACCESS_TOKEN_KEY, token);
+    else localStorage.removeItem(ACCESS_TOKEN_KEY);
+  } catch {
+    // See readStoredToken.
   }
+}
+
+// Every tab of the shop shares one session. When another tab signs out, or
+// in as someone else, this one follows: a tab left open after "sign out"
+// on a shared computer kept placing orders for up to fifteen minutes on
+// the token it still held. (The event only fires in the *other* tabs.)
+export function onTokenChange(listener) {
+  tokenListeners.add(listener);
+  return () => tokenListeners.delete(listener);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    // key is null when another tab cleared all of storage.
+    if (event.key !== null && event.key !== ACCESS_TOKEN_KEY) return;
+    accessToken = readStoredToken() || null;
+    tokenListeners.forEach((listener) => listener(accessToken));
+  });
 }
 
 // Lets AuthContext hear about a session that ended underneath it - a
@@ -134,7 +166,11 @@ export async function request(
 
   const payload = await parse(response);
 
-  if (response.status === 401 && auth && retry) {
+  // Only a rejected token is worth a refresh. A 401 about the request
+  // itself - the current password typed wrong - used to rotate the session
+  // for nothing, and sign the customer out whenever that refresh failed.
+  const tokenRejected = !payload?.code || payload.code === 'UNAUTHORIZED';
+  if (response.status === 401 && auth && retry && tokenRejected) {
     // The access token expired mid-session: refresh once and replay.
     try {
       await refreshSession();

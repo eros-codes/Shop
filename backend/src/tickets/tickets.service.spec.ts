@@ -5,7 +5,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { Brackets, DataSource } from 'typeorm';
 import { TicketsService } from './tickets.service';
 import { Ticket } from './entities/ticket.entity';
 import { UsersService } from '../users/users.service';
@@ -207,6 +207,12 @@ describe('TicketsService', () => {
       expect(qb.andWhere).toHaveBeenCalledWith('user.id = :userId', {
         userId: 7,
       });
+    });
+
+    it('searches every page, not just the one on screen', async () => {
+      await service.findAll(7, { page: 1, limit: 10, search: 'refund' }, true);
+
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.any(Brackets));
     });
 
     it('does not scope to a user when the caller is an admin', async () => {

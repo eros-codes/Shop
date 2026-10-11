@@ -5,11 +5,13 @@ import { api } from '../../lib/api';
 import { useWishlist } from '../../context/WishlistContext';
 import ProductCard from '../../components/product/ProductCard';
 import { EmptyState, SkeletonCard } from '../../components/ui/Primitives';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 export default function Favorites() {
   const { ids } = useWishlist();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  usePageTitle('علاقه‌مندی‌ها');
 
   useEffect(() => {
     const list = [...ids];

@@ -29,8 +29,7 @@ import {
 } from '../common/cache/catalog-cache.service';
 import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
-
-const DEFAULT_RETURN_WINDOW_DAYS = 7;
+import { returnWindowDays } from './return-window';
 
 // Refunding is the only step that moves money, and it is reachable only
 // after the goods are back with the shop.
@@ -76,10 +75,7 @@ export class ReturnsService {
   ) {}
 
   private get windowDays(): number {
-    return (
-      Number(this.configService.get<string>('RETURN_WINDOW_DAYS')) ||
-      DEFAULT_RETURN_WINDOW_DAYS
-    );
+    return returnWindowDays(this.configService);
   }
 
   async create(
@@ -223,7 +219,13 @@ export class ReturnsService {
         ...(isAdmin ? {} : { user: { id: userId } }),
         ...(status ? { status } : {}),
       },
-      relations: { order: true, user: true, items: { orderItem: true } },
+      // The product too, so the panel can say what is coming back - the
+      // variant title alone ("مشکی / 128GB") does not.
+      relations: {
+        order: true,
+        user: true,
+        items: { orderItem: { product: true } },
+      },
       select: {
         id: true,
         status: true,

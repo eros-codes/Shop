@@ -4,9 +4,16 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
-import { api, getAccessToken, onSessionLost, setAccessToken } from '../lib/api';
+import {
+  api,
+  getAccessToken,
+  onSessionLost,
+  onTokenChange,
+  setAccessToken,
+} from '../lib/api';
 
 const AuthContext = createContext(null);
 
@@ -80,6 +87,26 @@ export function AuthProvider({ children }) {
 
   useEffect(() => onSessionLost(() => setUser(null)), []);
 
+  // Another tab signed out, or in as someone else (see onTokenChange). A
+  // refresh in another tab changes the token but not who it belongs to,
+  // and is left alone.
+  const userRef = useRef(user);
+  userRef.current = user;
+  useEffect(
+    () =>
+      onTokenChange((token) => {
+        const identity = readToken(token);
+        if (!identity) {
+          setUser(null);
+          return;
+        }
+        if (String(userRef.current?.id) === String(identity.id)) return;
+        setUser(identity);
+        void loadProfile(identity);
+      }),
+    [loadProfile],
+  );
+
   const login = useCallback(
     async (mobile, password) => {
       const data = await api.post('/auth/login', { mobile, password });
@@ -102,7 +129,10 @@ export function AuthProvider({ children }) {
       const data = await api.post('/auth/verify-otp', { mobile, code });
       setAccessToken(data.accessToken);
       const identity = readToken(data.accessToken);
-      setUser(identity ?? data.user);
+      // The token carries only the id and role; the new account comes back
+      // whole with it. Without merging it the header greeted a customer who
+      // had just typed their name with "حساب من" until the next reload.
+      setUser(identity ? { ...identity, ...data.user } : data.user);
       return identity;
     },
     [],

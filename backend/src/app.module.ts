@@ -24,6 +24,7 @@ import { AuthModule } from './auth/auth.module';
 import { AddressModule } from './address/address.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { ProductsModule } from './products/products.module';
+import { ShopModule } from './shop/shop.module';
 import { CategoriesModule } from './categories/categories.module';
 import { BrandsModule } from './brands/brands.module';
 import { ShippingModule } from './shipping/shipping.module';
@@ -151,6 +152,28 @@ import { RetireVariantsOfDeletedProducts1791000000000 } from './migrations/17910
         TAX_RATE_PERCENT: Joi.number().min(0).max(100).default(10),
         RETURN_WINDOW_DAYS: Joi.number().integer().min(0).max(365).default(7),
         COD_MAX_AMOUNT: Joi.number().integer().min(0).default(20000000),
+        // The shop's own details, shown on the storefront's contact and
+        // legal pages (GET /shop/info). All optional: an empty one is
+        // simply left off the page.
+        SHOP_LEGAL_NAME: Joi.string().allow('').optional(),
+        SHOP_PHONE: Joi.string().allow('').optional(),
+        SHOP_EMAIL: Joi.string().email().allow('').optional(),
+        SHOP_ADDRESS: Joi.string().allow('').optional(),
+        SHOP_SUPPORT_HOURS: Joi.string().allow('').optional(),
+        // Linked from every page, so only https addresses are accepted.
+        SHOP_INSTAGRAM_URL: Joi.string()
+          .uri({ scheme: ['https'] })
+          .allow('')
+          .optional(),
+        SHOP_TELEGRAM_URL: Joi.string()
+          .uri({ scheme: ['https'] })
+          .allow('')
+          .optional(),
+        ENAMAD_ID: Joi.string().pattern(/^\d+$/).allow('').optional(),
+        ENAMAD_CODE: Joi.string()
+          .pattern(/^[A-Za-z0-9]+$/)
+          .allow('')
+          .optional(),
         TRUST_PROXY: Joi.string().allow('').default(''),
         THROTTLE_STORAGE: Joi.string()
           .valid('memory', 'database')
@@ -257,6 +280,7 @@ import { RetireVariantsOfDeletedProducts1791000000000 } from './migrations/17910
     AddressModule,
     TicketsModule,
     ProductsModule,
+    ShopModule,
     CategoriesModule,
     BrandsModule,
     ShippingModule,

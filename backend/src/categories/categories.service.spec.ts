@@ -1,11 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, In, IsNull, QueryFailedError } from 'typeorm';
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { CategoriesService } from './categories.service';
 import { Category } from './entities/category.entity';
 import { Product } from '../products/entities/product.entity';
@@ -119,6 +115,15 @@ describe('CategoriesService', () => {
       );
     });
 
+    it('moves a sub-category back to the top level', async () => {
+      await service.update(4, { parentId: null as unknown as number });
+
+      expect(categoriesRepo.update).toHaveBeenCalledWith(
+        { id: 4, deleted_at: IsNull() },
+        { parent: null },
+      );
+    });
+
     it('is a 404 when nothing live matched', async () => {
       categoriesRepo.update.mockResolvedValue({ affected: 0 });
       categoriesRepo.findOneBy.mockResolvedValue(null);
@@ -197,16 +202,20 @@ describe('CategoriesService', () => {
         { id: 2, parent: { id: 1 } },
       ]);
 
-      await expect(service.update(1, { parentId: 2 })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.update(1, { parentId: 2 })).rejects.toMatchObject({
+        status: 400,
+        code: 'CATEGORY_LOOP',
+      });
       expect(categoriesRepo.update).not.toHaveBeenCalled();
     });
 
     it('refuses to delete a category that still has children', async () => {
       categoriesRepo.count.mockResolvedValue(2);
 
-      await expect(service.remove(1)).rejects.toThrow(ConflictException);
+      await expect(service.remove(1)).rejects.toMatchObject({
+        status: 409,
+        code: 'CATEGORY_HAS_CHILDREN',
+      });
       expect(categoriesRepo.softDelete).not.toHaveBeenCalled();
     });
   });

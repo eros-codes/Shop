@@ -1245,6 +1245,13 @@
   border-color: var(--brand-500);
 }
 
+/* A choice that is shown but cannot be taken right now - a wallet that
+   does not cover the order, cash on delivery above its ceiling. */
+.option-card[data-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .option-card[data-selected='true'] {
   border-color: var(--brand-700);
   background: var(--brand-50);
@@ -2123,4 +2130,57 @@
   body:has(.mobile-bar[data-hidden='false']) .toasts {
     bottom: calc(84px + env(safe-area-inset-bottom));
   }
+}
+
+/* ===========================================================
+   Policy pages (terms, privacy, returns, contact)
+   =========================================================== */
+.info-page {
+  max-width: 820px;
+  margin-inline: auto;
+  line-height: 2.1;
+}
+
+.info-page h1 {
+  font-size: 21px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.info-page section {
+  margin-top: 22px;
+}
+
+.info-page h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--ink-900);
+}
+
+.info-page p,
+.info-page li {
+  font-size: 14px;
+  color: var(--ink-700);
+}
+
+.info-page ul,
+.info-page ol {
+  padding-inline-start: 22px;
+  display: grid;
+  gap: 4px;
+}
+
+/* ۱. ۲. ۳. rather than 1. 2. 3. in a Persian list. */
+.info-page ol {
+  list-style-type: persian;
+}
+
+.info-page a:not(.btn) {
+  color: var(--brand-600);
+  font-weight: 600;
+}
+
+.info-page .btn {
+  margin-top: 10px;
 }

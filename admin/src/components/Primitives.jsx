@@ -47,6 +47,17 @@ export function Modal({ title, children, footer, onClose, wide }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // The page underneath stays put while a dialog is open: on a phone a
+  // drag inside a long form used to scroll the table behind it instead.
+  // Restored to whatever it was, so a dialog over a dialog works too.
+  useEffect(() => {
+    const { overflow } = document.body.style;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = overflow;
+    };
+  }, []);
+
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose?.()}>
       <div className={`modal${wide ? ' modal-wide' : ''}`} role="dialog" aria-modal="true">

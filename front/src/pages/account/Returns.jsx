@@ -4,10 +4,12 @@ import { api } from '../../lib/api';
 import { formatDate, formatToman } from '../../lib/format';
 import { EmptyState } from '../../components/ui/Primitives';
 import { RETURN_STATUS } from './orderStatus';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 export default function Returns() {
   const [returns, setReturns] = useState([]);
   const [loading, setLoading] = useState(true);
+  usePageTitle('مرجوعی‌ها');
 
   useEffect(() => {
     api

@@ -25,10 +25,12 @@ const mockRepo = () => ({
   delete: jest.fn(),
   update: jest.fn().mockResolvedValue({ affected: 1 }),
   count: jest.fn().mockResolvedValue(0),
+  findAndCount: jest.fn().mockResolvedValue([[], 0]),
 });
 
 describe('WalletsService', () => {
   let service: WalletsService;
+  const auditService = { record: jest.fn() };
   let walletRepo: ReturnType<typeof mockRepo>;
   let chargeRequestRepo: ReturnType<typeof mockRepo>;
   let zarinpalService: { requestPayment: jest.Mock; verifyPayment: jest.Mock };
@@ -56,11 +58,12 @@ describe('WalletsService', () => {
 
     const mockDataSource = {
       transaction: jest.fn((cb: any) => cb(mockManager)),
+      getRepository: mockManager.getRepository,
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        { provide: AuditService, useValue: { record: jest.fn() } },
+        { provide: AuditService, useValue: auditService },
         WalletsService,
         { provide: getRepositoryToken(Wallet), useValue: walletRepo },
         {
@@ -79,6 +82,33 @@ describe('WalletsService', () => {
     }).compile();
 
     service = module.get<WalletsService>(WalletsService);
+  });
+
+  // The wallet page's history. It read `wallet.transactions`, which the API
+  // never sent, so the section never appeared.
+  describe('findTransactions', () => {
+    it("pages through one wallet's movements, newest first", async () => {
+      walletTransactionRepo.findAndCount.mockResolvedValue([
+        [{ id: 9 }, { id: 8 }],
+        12,
+      ]);
+
+      const result = await service.findTransactions(3, 2, 10);
+
+      expect(walletTransactionRepo.findAndCount).toHaveBeenCalledWith({
+        where: { wallet: { id: 3 } },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        skip: 10,
+        take: 10,
+      });
+      expect(result).toEqual({
+        items: [{ id: 9 }, { id: 8 }],
+        total: 12,
+        page: 2,
+        limit: 10,
+        totalPages: 2,
+      });
+    });
   });
 
   describe('adminCharge', () => {
@@ -204,6 +234,33 @@ describe('WalletsService', () => {
         code: ErrorCodes.INSUFFICIENT_WALLET_BALANCE,
       });
       expect(walletTransactionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('records who took the money out, and why', async () => {
+      walletRepo.findOne.mockResolvedValue({
+        is_active: true,
+        id: 1,
+        amount: 500,
+      });
+
+      await service.withdraw(
+        1,
+        { amount: 200, note: 'paid out to card' },
+        { userId: 9, label: '09120000001' },
+      );
+
+      expect(walletTransactionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount: -200,
+          description: 'paid out to card',
+        }),
+      );
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'wallet.admin_withdrawn',
+          actor: { userId: 9, label: '09120000001' },
+        }),
+      );
     });
 
     it('allows withdrawing the exact full balance down to zero', async () => {

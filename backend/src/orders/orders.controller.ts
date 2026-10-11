@@ -10,9 +10,12 @@ import {
   UseGuards,
   ForbiddenException,
   Headers,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { QuoteOrderDto } from './dto/quote-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { FilterOrderDto } from './dto/filter-order.dto';
@@ -35,6 +38,21 @@ import { ErrorCodes } from '../common/errors/error-codes';
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  // The price checkout shows before the customer pays - see
+  // OrdersService.quote. It also tries discount codes, so it is limited
+  // like placing an order, a little more loosely because one checkout asks
+  // again whenever the address, courier or payment choice changes.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('quote')
+  async quote(
+    @Body() dto: QuoteOrderDto,
+    @CurrentUser() currentUser: CurrentUserPayload,
+  ) {
+    const quote = await this.ordersService.quote(currentUser.userId, dto);
+    return { data: quote, message: 'Order priced' };
+  }
 
   // Each attempt may try a discount code or open a gateway session, so it
   // keeps a tighter limit than the site-wide one.

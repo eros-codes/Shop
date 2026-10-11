@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Wallet } from 'lucide-react';
+import { History, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatToman } from '../lib/format';
+import WalletHistory from '../components/WalletHistory';
 import {
   ConnectionError,
   EmptyState,
+  Modal,
   TableSkeleton,
 } from '../components/Primitives';
 
@@ -14,10 +16,11 @@ export default function Wallets() {
   // Tracked separately from the data so a dead connection is not rendered as
   // an empty table - the two look identical to the admin otherwise.
   const [failed, setFailed] = useState(false);
+  const [viewing, setViewing] = useState(null);
 
   useEffect(() => {
     api
-      .get('/wallets?limit=100', { auth: true })
+      .get('/wallets', { auth: true })
       .then((data) => setWallets(data?.items ?? data ?? []))
       .catch(() => {
         setWallets([]);
@@ -53,6 +56,7 @@ export default function Wallets() {
                   <th>موبایل</th>
                   <th>موجودی</th>
                   <th>وضعیت</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -68,6 +72,17 @@ export default function Wallets() {
                         {wallet.is_active ? 'فعال' : 'غیرفعال'}
                       </span>
                     </td>
+                    <td>
+                      <div className="cell-actions">
+                        <button
+                          className="icon-btn"
+                          title="تراکنش‌ها"
+                          onClick={() => setViewing(wallet)}
+                        >
+                          <History size={15} />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -75,6 +90,19 @@ export default function Wallets() {
           </div>
         )}
       </section>
+
+      {viewing ? (
+        <Modal
+          title={`تراکنش‌های ${viewing.user?.display_name ?? viewing.user?.mobile ?? 'کیف پول'}`}
+          onClose={() => setViewing(null)}
+        >
+          <div className="card card-pad spread" style={{ marginBottom: 12 }}>
+            <span className="small muted">موجودی</span>
+            <span className="strong">{formatToman(viewing.amount)}</span>
+          </div>
+          <WalletHistory walletId={viewing.id} />
+        </Modal>
+      ) : null}
     </>
   );
 }

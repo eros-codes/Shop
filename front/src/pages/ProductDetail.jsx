@@ -7,7 +7,7 @@ import {
   Package,
   Plus,
   RotateCcw,
-  ShieldCheck,
+  CreditCard,
   ShoppingCart,
   Truck,
 } from 'lucide-react';
@@ -23,8 +23,12 @@ import {
   effectivePrice,
   formatToman,
   imageUrl,
+  returnWindowLabel,
+  toPersianDigits,
 } from '../lib/format';
+import { useCatalog } from '../context/CatalogContext';
 import { useInView } from '../lib/useInView';
+import { usePageTitle } from '../lib/usePageTitle';
 import ProductCard from '../components/product/ProductCard';
 import {
   Breadcrumb,
@@ -76,6 +80,7 @@ export default function ProductDetail() {
   const { add } = useCart();
   const wishlist = useWishlist();
   const { isAuthenticated } = useAuth();
+  const { shop } = useCatalog();
   const toast = useToast();
 
   const [product, setProduct] = useState(null);
@@ -178,6 +183,15 @@ export default function ProductDetail() {
   const canBuy = !!product && (axes.length === 0 || !!selectedVariant) && stock > 0;
   const needsChoice = axes.length > 0 && !selectedVariant;
 
+  usePageTitle(product?.title);
+
+  // Switching to an option with less stock kept the quantity picked for
+  // the last one: eight of a colour that has two left went to the basket
+  // one unit at a time, two arrived and an error explained the rest.
+  useEffect(() => {
+    if (stock > 0) setQuantity((value) => Math.min(value, stock));
+  }, [stock]);
+
   const descriptiveValues = product?.attributeValues ?? [];
 
   const addToCart = async () => {
@@ -279,7 +293,7 @@ export default function ProductDetail() {
                 className="badge badge-accent"
                 style={{ position: 'absolute', top: 16, insetInlineStart: 16 }}
               >
-                ٪{off} تخفیف
+                ٪{toPersianDigits(off)} تخفیف
               </span>
             ) : null}
           </div>
@@ -376,7 +390,9 @@ export default function ProductDetail() {
               )}
 
               {stock > 0 && stock <= 5 ? (
-                <span className="badge badge-warning">تنها {stock} عدد باقی مانده</span>
+                <span className="badge badge-warning">
+                  تنها {toPersianDigits(stock)} عدد باقی مانده
+                </span>
               ) : null}
             </div>
 
@@ -435,10 +451,12 @@ export default function ProductDetail() {
           <div className="grid auto-grid pdp-trust" style={{ marginTop: 16 }}>
             {[
               { icon: Truck, title: 'ارسال سریع', sub: 'به سراسر ایران' },
-              { icon: ShieldCheck, title: 'ضمانت اصالت', sub: 'کالای اورجینال' },
-              { icon: RotateCcw, title: '۷ روز مرجوعی', sub: 'بدون قید و شرط' },
-              { icon: Package, title: 'بسته‌بندی ایمن', sub: 'تحویل سالم' },
-            ].map((item) => (
+              { icon: CreditCard, title: 'پرداخت آنلاین', sub: 'درگاه بانکی زرین‌پال' },
+              { icon: RotateCcw, title: returnWindowLabel(shop.returnWindowDays), sub: 'طبق شرایط مرجوعی' },
+              { icon: Package, title: 'پیگیری سفارش', sub: 'کد رهگیری در حساب کاربری' },
+            ]
+              .filter((item) => item.title)
+              .map((item) => (
               <div className="card card-pad row" key={item.title} style={{ gap: 10 }}>
                 <item.icon size={22} color="var(--brand-600)" />
                 <div>
@@ -490,7 +508,7 @@ export default function ProductDetail() {
                         {value.option?.value ??
                           value.value_text ??
                           (value.value_number !== null && value.value_number !== undefined
-                            ? `${value.value_number} ${value.attribute?.unit ?? ''}`
+                            ? `${toPersianDigits(value.value_number)} ${value.attribute?.unit ?? ''}`
                             : value.value_boolean
                               ? 'دارد'
                               : 'ندارد')}
@@ -523,7 +541,7 @@ export default function ProductDetail() {
                     <select name="rate" className="select" style={{ width: 120 }} defaultValue="5">
                       {[5, 4, 3, 2, 1].map((value) => (
                         <option key={value} value={value}>
-                          {value} ستاره
+                          {toPersianDigits(value)} ستاره
                         </option>
                       ))}
                     </select>

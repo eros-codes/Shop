@@ -4,7 +4,7 @@ import { Eye, ShoppingBag } from 'lucide-react';
 import { api, buildQuery } from '../lib/api';
 import { formatDateTime, formatToman } from '../lib/format';
 import {
-  Button,
+  ConnectionError,
   EmptyState,
   Pagination,
   SearchBox,
@@ -17,18 +17,33 @@ export default function Orders() {
   const [params, setParams] = useSearchParams();
   const [result, setResult] = useState({ items: [], total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+  // A failed request is not "no orders".
+  const [failed, setFailed] = useState(false);
+  const [search, setSearch] = useState(params.get('search') ?? '');
   const [openId, setOpenId] = useState(null);
 
   const status = params.get('status') ?? '';
-  const page = Number(params.get('page') ?? 1);
+  const page = Math.max(1, Number(params.get('page')) || 1);
+  const query = params.get('search') ?? '';
+
+  // Searched on the server, across every page: it used to filter only the
+  // twenty orders on screen, so an order on page three was "not found".
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (search.trim() !== query) update({ search: search.trim(), page: '' });
+    }, 350);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     api
-      .get(`/orders${buildQuery({ status: status || undefined, page, limit: 20 })}`, {
-        auth: true,
-      })
+      .get(
+        `/orders${buildQuery({ status: status || undefined, search: query || undefined, page, limit: 20 })}`,
+        { auth: true },
+      )
       .then((data) =>
         setResult({
           items: data?.items ?? [],
@@ -36,9 +51,12 @@ export default function Orders() {
           totalPages: data?.totalPages ?? 1,
         }),
       )
-      .catch(() => setResult({ items: [], total: 0, totalPages: 1 }))
+      .catch(() => {
+        setResult({ items: [], total: 0, totalPages: 1 });
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
-  }, [status, page]);
+  }, [status, query, page]);
 
   useEffect(load, [load]);
 
@@ -51,15 +69,7 @@ export default function Orders() {
     setParams(next);
   };
 
-  const term = search.trim();
-  const rows = term
-    ? result.items.filter(
-        (order) =>
-          String(order.id).includes(term) ||
-          (order.invoice_number ?? '').includes(term) ||
-          (order.user?.mobile ?? '').includes(term),
-      )
-    : result.items;
+  const rows = result.items;
 
   return (
     <>
@@ -92,6 +102,8 @@ export default function Orders() {
       <section className="card">
         {loading ? (
           <TableSkeleton cols={6} />
+        ) : failed ? (
+          <ConnectionError onRetry={load} />
         ) : rows.length === 0 ? (
           <EmptyState icon={<ShoppingBag size={26} />} title="سفارشی پیدا نشد" />
         ) : (

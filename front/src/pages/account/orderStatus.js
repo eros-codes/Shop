@@ -1,6 +1,8 @@
 // The order lifecycle, as the storefront names it.
+// "pending" is a cash-on-delivery order the shop has not taken on yet -
+// nothing is waiting for the customer to pay.
 export const ORDER_STATUS = {
-  pending: { label: 'در انتظار پرداخت', tone: 'warning' },
+  pending: { label: 'در انتظار تأیید', tone: 'warning' },
   awaiting_payment: { label: 'در انتظار پرداخت', tone: 'warning' },
   paid: { label: 'پرداخت شد', tone: 'success' },
   processing: { label: 'در حال آماده‌سازی', tone: '' },
@@ -10,6 +12,10 @@ export const ORDER_STATUS = {
 };
 
 export const TIMELINE = ['paid', 'processing', 'sent', 'delivered'];
+
+// Paid at the door, so the first step is the order being registered, not
+// paid - the timeline used to tick "پرداخت" for an order nobody had paid.
+export const COD_TIMELINE = ['pending', 'processing', 'sent', 'delivered'];
 
 export const RETURN_STATUS = {
   requested: { label: 'در انتظار بررسی', tone: 'warning' },

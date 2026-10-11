@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import {
   BadgePercent,
   Banknote,
@@ -15,16 +15,23 @@ import { useCart } from '../context/CartContext';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { formatToman } from '../lib/format';
+import { PROVINCES } from '../lib/provinces';
 import { useInView } from '../lib/useInView';
+import { usePageTitle } from '../lib/usePageTitle';
 import { Breadcrumb, Button, Field } from '../components/ui/Primitives';
 
 const STEPS = ['آدرس', 'روش ارسال', 'پرداخت'];
 
+// Errors from pricing that are about the payment choice, not the basket:
+// the page drops back to paying online instead of refusing to go on.
+const COD_REFUSALS = ['COD_LIMIT_EXCEEDED', 'COD_NOT_SUPPORTED'];
+
 export default function Checkout() {
   const navigate = useNavigate();
   const toast = useToast();
-  const { user } = useAuth();
-  const { lines, goodsTotal, reload, clearLocal, settled } = useCart();
+  const { user, ready, isAuthenticated } = useAuth();
+  const { lines, reload, clearLocal, settled } = useCart();
+  usePageTitle('تکمیل خرید');
 
   const [addresses, setAddresses] = useState([]);
   const [addressId, setAddressId] = useState(null);
@@ -37,8 +44,22 @@ export default function Checkout() {
 
   const [discountCode, setDiscountCode] = useState('');
   const [appliedCode, setAppliedCode] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('wallet');
-  const [wallet, setWallet] = useState(null);
+  const [discountNote, setDiscountNote] = useState(null);
+
+  // undefined: still asking; null: this account has no wallet yet.
+  const [wallet, setWallet] = useState(undefined);
+  // What the customer picked. The method actually used is worked out
+  // below, because a pick can stop being possible (a courier that does
+  // not collect cash, a wallet that does not cover the total).
+  const [chosenPayment, setChosenPayment] = useState(null);
+  const [codRefusal, setCodRefusal] = useState(null);
+
+  // The server's price for exactly this order - see OrdersService.quote.
+  const [price, setPrice] = useState(null);
+  const [pricing, setPricing] = useState(false);
+  const [priceError, setPriceError] = useState(null);
+  const pricingRun = useRef(0);
+
   const [placing, setPlacing] = useState(false);
   // `placing` cannot guard the submit on its own: setState is asynchronous,
   // so several fast clicks all run placeOrder before React re-renders and
@@ -60,12 +81,17 @@ export default function Checkout() {
       })),
     [lines],
   );
+  const goodsTotal = useMemo(
+    () => lines.reduce((sum, line) => sum + Number(line.unitPrice ?? 0) * line.quantity, 0),
+    [lines],
+  );
 
   useEffect(() => {
-    if (settled && lines.length === 0) navigate('/cart', { replace: true });
-  }, [settled, lines.length, navigate]);
+    if (isAuthenticated && settled && lines.length === 0) navigate('/cart', { replace: true });
+  }, [isAuthenticated, settled, lines.length, navigate]);
 
   useEffect(() => {
+    if (!user?.id) return;
     api
       .get('/addresses', { auth: true })
       .then((data) => {
@@ -76,18 +102,16 @@ export default function Checkout() {
       })
       .catch(() => setShowAddressForm(true));
 
-    if (user?.id) {
-      api
-        .get(`/wallets/user/${user.id}`, { auth: true })
-        .then(setWallet)
-        .catch(() => setWallet(null));
-    }
+    api
+      .get(`/wallets/user/${user.id}`, { auth: true })
+      .then(setWallet)
+      .catch(() => setWallet(null));
   }, [user?.id]);
 
   // The API prices shipping for this address and this basket: the cost
   // depends on where it goes and how much it weighs, so the quote has to
   // come from the server, not from a guess here.
-  const quote = useCallback(async () => {
+  const quoteShipping = useCallback(async () => {
     if (!addressId || items.length === 0) return;
     setQuoting(true);
     try {
@@ -111,12 +135,87 @@ export default function Checkout() {
   }, [addressId, items, goodsTotal, toast]);
 
   useEffect(() => {
-    void quote();
-  }, [quote]);
+    void quoteShipping();
+  }, [quoteShipping]);
 
   const selectedShipping = shippingOptions.find(
     (option) => option.methodId === shippingMethodId,
   );
+  const codAvailable = !!selectedShipping?.supportsCashOnDelivery && !codRefusal;
+  const payOnDelivery = chosenPayment === 'cod' && codAvailable;
+
+  // The price for exactly what would be sent. Recomputed whenever the
+  // basket, address, courier, code or cash-on-delivery choice changes;
+  // a slower answer to an older question is thrown away.
+  useEffect(() => {
+    if (!addressId || items.length === 0 || quoting) return;
+    if (shippingOptions.length > 0 && !shippingMethodId) return;
+
+    const run = ++pricingRun.current;
+    setPricing(true);
+    api
+      .post(
+        '/orders/quote',
+        {
+          addressId,
+          items,
+          ...(shippingMethodId ? { shippingMethodId } : {}),
+          ...(appliedCode ? { discountCode: appliedCode } : {}),
+          ...(payOnDelivery ? { payOnDelivery: true } : {}),
+        },
+        { auth: true },
+      )
+      .then((result) => {
+        if (run !== pricingRun.current) return;
+        setPrice(result);
+        setPriceError(null);
+        const discount = result?.discount;
+        if (discount?.applied) {
+          setDiscountNote({
+            tone: 'success',
+            text: `کد «${discount.code}» اعمال شد: ${formatToman(result.discount_amount)} تخفیف`,
+          });
+        } else if (discount) {
+          // Shown, then dropped from the order: placing it with a code the
+          // server just turned down would only fail again.
+          setDiscountNote({ tone: 'danger', text: translateError(discount.error) });
+          setAppliedCode('');
+        }
+      })
+      .catch((error) => {
+        if (run !== pricingRun.current) return;
+        if (payOnDelivery && COD_REFUSALS.includes(error?.code)) {
+          setCodRefusal(translateError(error));
+          return;
+        }
+        setPrice(null);
+        setPriceError(error);
+      })
+      .finally(() => {
+        if (run === pricingRun.current) setPricing(false);
+      });
+  }, [addressId, items, shippingMethodId, shippingOptions.length, quoting, appliedCode, payOnDelivery]);
+
+  // A cash-on-delivery refusal belongs to the courier it was given for.
+  useEffect(() => setCodRefusal(null), [shippingMethodId, addressId]);
+
+  const total = price?.total_price ?? null;
+  const walletCovers = !!wallet && total !== null && Number(wallet.amount) >= total;
+  const paymentMethod = payOnDelivery
+    ? 'cod'
+    : chosenPayment === 'wallet' && (walletCovers || total === null)
+      ? 'wallet'
+      : chosenPayment === 'online'
+        ? 'online'
+        : walletCovers
+          ? 'wallet'
+          : 'online';
+
+  const applyCode = () => {
+    const code = discountCode.trim();
+    setDiscountNote(null);
+    setAppliedCode(code);
+  };
 
   const saveAddress = async (event) => {
     event.preventDefault();
@@ -150,7 +249,7 @@ export default function Checkout() {
       toast.error('لطفاً آدرس تحویل را انتخاب کنید');
       return;
     }
-    if (placingRef.current) return;
+    if (placingRef.current || !price) return;
     placingRef.current = true;
     setPlacing(true);
     try {
@@ -198,26 +297,28 @@ export default function Checkout() {
     }
   };
 
-  const shippingCost = selectedShipping?.cost ?? 0;
-  const codFee =
-    paymentMethod === 'cod' ? (selectedShipping?.cashOnDeliveryFee ?? 0) : 0;
-  // The authoritative total comes back with the order; this is the
-  // estimate the customer sees while choosing.
-  const estimatedTax = Math.round(goodsTotal * 0.1);
-  const estimatedTotal = goodsTotal + shippingCost + codFee + estimatedTax;
-
   const step = !addressId ? 0 : !shippingMethodId && shippingOptions.length > 0 ? 1 : 2;
 
   const placeRef = useRef(null);
   const placeVisible = useInView(placeRef, [settled]);
 
-  if (!settled) {
+  if (ready && !isAuthenticated) {
+    // Reached by a link or the back button while signed out: the address
+    // list, the wallet and the order itself all need an account.
+    return <Navigate to="/login?next=/checkout" replace />;
+  }
+
+  if (!ready || !settled) {
     return (
       <div className="container page">
         <div className="skeleton" style={{ height: 360, borderRadius: 16 }} />
       </div>
     );
   }
+
+  const amount = (value) =>
+    pricing ? '…' : value === undefined || value === null ? '—' : formatToman(value);
+  const canPlace = !!price && !pricing && !quoting;
 
   return (
     <div className="container page">
@@ -286,7 +387,16 @@ export default function Checkout() {
               <form onSubmit={saveAddress} className="stack" style={{ marginTop: 16 }}>
                 <div className="grid auto-grid">
                   <Field label="استان">
-                    <input className="input" name="province" required />
+                    <select className="select" name="province" defaultValue="" required>
+                      <option value="" disabled>
+                        انتخاب کنید…
+                      </option>
+                      {PROVINCES.map((province) => (
+                        <option key={province} value={province}>
+                          {province}
+                        </option>
+                      ))}
+                    </select>
                   </Field>
                   <Field label="شهر">
                     <input className="input" name="city" required />
@@ -381,12 +491,17 @@ export default function Checkout() {
             </h2>
 
             <div className="stack" style={{ gap: 10 }}>
-              <label className="option-card" data-selected={paymentMethod === 'wallet'}>
+              <label
+                className="option-card"
+                data-selected={paymentMethod === 'wallet'}
+                data-disabled={!walletCovers}
+              >
                 <input
                   type="radio"
                   name="payment"
                   checked={paymentMethod === 'wallet'}
-                  onChange={() => setPaymentMethod('wallet')}
+                  disabled={!walletCovers}
+                  onChange={() => setChosenPayment('wallet')}
                 />
                 <div style={{ flex: 1 }}>
                   <div className="row" style={{ gap: 8 }}>
@@ -394,8 +509,12 @@ export default function Checkout() {
                     <span className="strong small">کیف پول</span>
                   </div>
                   <div className="tiny muted">
-                    موجودی:{' '}
-                    {wallet ? formatToman(wallet.amount) : 'در حال دریافت…'}
+                    {wallet === undefined
+                      ? 'در حال دریافت موجودی…'
+                      : `موجودی: ${formatToman(wallet?.amount ?? 0)}`}
+                    {wallet !== undefined && total !== null && !walletCovers
+                      ? ' — برای این سفارش کافی نیست'
+                      : ''}
                   </div>
                 </div>
               </label>
@@ -405,7 +524,7 @@ export default function Checkout() {
                   type="radio"
                   name="payment"
                   checked={paymentMethod === 'online'}
-                  onChange={() => setPaymentMethod('online')}
+                  onChange={() => setChosenPayment('online')}
                 />
                 <div style={{ flex: 1 }}>
                   <div className="row" style={{ gap: 8 }}>
@@ -417,12 +536,17 @@ export default function Checkout() {
               </label>
 
               {selectedShipping?.supportsCashOnDelivery ? (
-                <label className="option-card" data-selected={paymentMethod === 'cod'}>
+                <label
+                  className="option-card"
+                  data-selected={paymentMethod === 'cod'}
+                  data-disabled={!!codRefusal}
+                >
                   <input
                     type="radio"
                     name="payment"
                     checked={paymentMethod === 'cod'}
-                    onChange={() => setPaymentMethod('cod')}
+                    disabled={!!codRefusal}
+                    onChange={() => setChosenPayment('cod')}
                   />
                   <div style={{ flex: 1 }}>
                     <div className="row" style={{ gap: 8 }}>
@@ -430,8 +554,8 @@ export default function Checkout() {
                       <span className="strong small">پرداخت در محل</span>
                     </div>
                     <div className="tiny muted">
-                      کارمزد دریافت وجه:{' '}
-                      {formatToman(selectedShipping.cashOnDeliveryFee ?? 0)}
+                      {codRefusal ??
+                        `کارمزد دریافت وجه: ${formatToman(selectedShipping.cashOnDeliveryFee ?? 0)}`}
                     </div>
                   </div>
                 </label>
@@ -470,50 +594,67 @@ export default function Checkout() {
               className="input"
               placeholder="کد تخفیف"
               value={discountCode}
-              onChange={(event) => setDiscountCode(event.target.value.toUpperCase())}
-            />
-            <Button
-              variant="soft"
-              onClick={() => {
-                setAppliedCode(discountCode.trim());
-                if (discountCode.trim()) {
-                  toast.toast('کد هنگام ثبت سفارش بررسی می‌شود');
-                }
+              onChange={(event) => {
+                setDiscountCode(event.target.value.toUpperCase());
+                setDiscountNote(null);
               }}
-            >
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') applyCode();
+              }}
+            />
+            <Button variant="soft" onClick={applyCode} aria-label="اعمال کد تخفیف">
               <BadgePercent size={16} />
             </Button>
           </div>
-          {appliedCode ? (
-            <div className="tiny" style={{ color: 'var(--success-600)', marginTop: 6 }}>
-              کد «{appliedCode}» هنگام ثبت سفارش اعمال می‌شود
+          {discountNote ? (
+            <div
+              className="tiny"
+              style={{ color: `var(--${discountNote.tone}-600)`, marginTop: 6 }}
+            >
+              {discountNote.text}
             </div>
           ) : null}
 
           <div className="divider" />
 
+          {priceError ? (
+            <div className="small" style={{ color: 'var(--danger-600)', marginBottom: 8 }}>
+              {translateError(priceError)}
+            </div>
+          ) : null}
+
           <div className="summary-row">
             <span className="muted">قیمت کالاها</span>
-            <span>{formatToman(goodsTotal)}</span>
+            <span>{amount(price?.items_total)}</span>
           </div>
-          <div className="summary-row">
-            <span className="muted">هزینه ارسال</span>
-            <span>{shippingCost === 0 ? 'رایگان' : formatToman(shippingCost)}</span>
-          </div>
-          {codFee > 0 ? (
-            <div className="summary-row">
-              <span className="muted">کارمزد پرداخت در محل</span>
-              <span>{formatToman(codFee)}</span>
+          {Number(price?.discount_amount) > 0 ? (
+            <div className="summary-row" style={{ color: 'var(--success-600)' }}>
+              <span>تخفیف</span>
+              <span>−{amount(price.discount_amount)}</span>
             </div>
           ) : null}
           <div className="summary-row">
-            <span className="muted">مالیات (تخمینی)</span>
-            <span>{formatToman(estimatedTax)}</span>
+            <span className="muted">هزینه ارسال</span>
+            <span>
+              {price && !pricing && price.shipping_cost === 0
+                ? 'رایگان'
+                : amount(price?.shipping_cost)}
+            </span>
+          </div>
+          {Number(price?.cod_fee) > 0 ? (
+            <div className="summary-row">
+              <span className="muted">کارمزد پرداخت در محل</span>
+              <span>{amount(price.cod_fee)}</span>
+            </div>
+          ) : null}
+          <div className="summary-row">
+            <span className="muted">مالیات بر ارزش افزوده</span>
+            <span>{amount(price?.tax_amount)}</span>
           </div>
 
           <div className="summary-row summary-total">
             <span>مبلغ قابل پرداخت</span>
-            <span>{formatToman(estimatedTotal)}</span>
+            <span>{amount(price?.total_price)}</span>
           </div>
 
           <div ref={placeRef}>
@@ -523,31 +664,32 @@ export default function Checkout() {
               size="lg"
               style={{ marginTop: 14 }}
               loading={placing}
+              disabled={!canPlace}
               onClick={placeOrder}
             >
-              ثبت سفارش و پرداخت
+              {paymentMethod === 'wallet'
+                ? 'پرداخت از کیف پول و ثبت سفارش'
+                : paymentMethod === 'cod'
+                  ? 'ثبت سفارش (پرداخت در محل)'
+                  : 'ثبت سفارش و پرداخت'}
             </Button>
           </div>
-
-          <p className="tiny muted" style={{ marginTop: 10, lineHeight: 1.9 }}>
-            مبلغ نهایی و تخفیف‌ها هنگام ثبت سفارش توسط سرور محاسبه می‌شود؛ عدد
-            بالا تخمینی است.
-          </p>
         </div>
       </div>
 
       <div className="mobile-bar" data-hidden={placeVisible} aria-hidden={placeVisible}>
         <div className="mobile-bar-info">
           <span className="tiny muted">مبلغ قابل پرداخت</span>
-          <span className="strong nowrap">{formatToman(estimatedTotal)}</span>
+          <span className="strong nowrap">{amount(price?.total_price)}</span>
         </div>
         <Button
           variant="primary"
           loading={placing}
+          disabled={!canPlace}
           onClick={placeOrder}
           tabIndex={placeVisible ? -1 : 0}
         >
-          ثبت سفارش و پرداخت
+          ثبت سفارش
         </Button>
       </div>
     </div>

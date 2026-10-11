@@ -12,11 +12,13 @@ import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Ticket } from './entities/ticket.entity';
 import { PaginatedResult } from '../common/interfaces/paginated-result.interface';
-import { DataSource, In, IsNull, Not, Repository } from 'typeorm';
+import { Brackets, DataSource, In, IsNull, Not, Repository } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import TicketStatusEnum from './enums/ticket-status.enum';
 import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
+import { toAsciiDigits } from '../common/validation/normalize';
+import { escapeLikePattern } from '../products/utils/product-search';
 
 const MAX_OPEN_THREADS_PER_USER = 10;
 const TICKET_COOLDOWN_SECONDS = 30;
@@ -156,6 +158,23 @@ export class TicketsService {
     }
     if (status) {
       qb.andWhere('ticket.status = :status', { status });
+    }
+    const term = toAsciiDigits(query.search ?? '').trim();
+    if (term) {
+      const like = `%${escapeLikePattern(term)}%`;
+      qb.andWhere(
+        new Brackets((where) => {
+          where.where('ticket.title LIKE :like', { like });
+          if (/^\d+$/.test(term) && Number(term) <= 2_147_483_647) {
+            where.orWhere('ticket.id = :ticketId', { ticketId: Number(term) });
+          }
+          if (isAdmin) {
+            where
+              .orWhere('user.mobile LIKE :like', { like })
+              .orWhere('user.display_name LIKE :like', { like });
+          }
+        }),
+      );
     }
 
     const [items, total] = await qb

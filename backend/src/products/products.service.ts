@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import {
+  Brackets,
   DataSource,
   EntityManager,
   In,
@@ -35,6 +36,7 @@ import { syncProductStock } from './utils/product-stock';
 import { CategoriesService } from '../categories/categories.service';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { CreateBookmarkDto } from './dto/create-bookmark.dto';
+import { BasketItemDto } from './dto/basket-item.dto';
 import { MergeBasketDto } from './dto/merge-basket.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { Product } from './entities/product.entity';
@@ -85,6 +87,9 @@ export interface ProductViewOptions {
 interface FilterContext {
   categoryIds?: number[];
   optionMeta?: Map<number, { attributeId: number; isAxis: boolean }>;
+  // The panel's search: staff also look a product up by an option's SKU,
+  // the code on the shelf label.
+  staffSearch?: boolean;
 }
 
 export interface ProductFacet {
@@ -311,7 +316,11 @@ export class ProductsService {
       )
       .addSelect(['cover.id', 'cover.url', 'cover.order']);
 
-    if (!(await this.applyFilters(qb, query))) {
+    if (
+      !(await this.applyFilters(qb, query, {
+        staffSearch: !!options.includeDrafts,
+      }))
+    ) {
       return { items: [], total: 0, page, limit, totalPages: 0 };
     }
 
@@ -394,20 +403,43 @@ export class ProductsService {
 
     if (search) {
       const plan = buildProductSearchPlan(search);
-      if (!plan) {
+      const skuPattern = context.staffSearch
+        ? `%${escapeLikePattern(search.trim())}%`
+        : null;
+      if (!plan && !skuPattern) {
         return false;
       }
-      if (plan.fullTextQuery) {
-        qb.andWhere(
-          'MATCH(product.title) AGAINST (:fullTextQuery IN BOOLEAN MODE)',
-          { fullTextQuery: plan.fullTextQuery },
-        );
-      }
-      plan.likePatterns.forEach((pattern, index) => {
-        qb.andWhere(`product.title LIKE :titlePattern${index}`, {
-          [`titlePattern${index}`]: pattern,
-        });
-      });
+      qb.andWhere(
+        new Brackets((where) => {
+          if (plan) {
+            where.where(
+              new Brackets((title) => {
+                title.where(
+                  plan.fullTextQuery
+                    ? 'MATCH(product.title) AGAINST (:fullTextQuery IN BOOLEAN MODE)'
+                    : '1 = 1',
+                  plan.fullTextQuery
+                    ? { fullTextQuery: plan.fullTextQuery }
+                    : {},
+                );
+                plan.likePatterns.forEach((pattern, index) => {
+                  title.andWhere(`product.title LIKE :titlePattern${index}`, {
+                    [`titlePattern${index}`]: pattern,
+                  });
+                });
+              }),
+            );
+          } else {
+            where.where('1 = 0');
+          }
+          if (skuPattern) {
+            where.orWhere(
+              'EXISTS (SELECT 1 FROM product_variants sv WHERE sv.product_id = product.id AND sv.deleted_at IS NULL AND sv.sku LIKE :skuPattern)',
+              { skuPattern },
+            );
+          }
+        }),
+      );
     }
     return true;
   }
@@ -678,6 +710,45 @@ export class ProductsService {
     return this.findOne(productId, { includeDrafts: true });
   }
 
+  // Which picture leads: the thumbnail in every listing and the first one
+  // on the product page. It was always whichever was uploaded first, and
+  // changing it meant deleting every picture and uploading them again.
+  async makeCoverImage(productId: number, imageId: number): Promise<Product> {
+    await this.dataSource.transaction(async (manager) => {
+      await lockActiveProduct(manager, productId, 'pessimistic_write');
+
+      const image = await manager.findOne(ProductImage, {
+        select: { id: true, order: true },
+        where: { id: imageId, product: { id: productId } },
+      });
+      if (!image) {
+        throw new NotFoundException(
+          `Image ${imageId} not found on product ${productId}`,
+        );
+      }
+      if (image.order === 0) return;
+
+      // (product, order) is unique, so it moves in three steps: the new
+      // cover steps aside, the ones before it shift down one place -
+      // highest first, so no two ever share a place - and it takes 0.
+      await manager.update(ProductImage, { id: image.id }, { order: -1 });
+      await manager
+        .createQueryBuilder()
+        .update(ProductImage)
+        .set({ order: () => '`order` + 1' })
+        .where('productId = :productId AND `order` >= 0 AND `order` < :from', {
+          productId,
+          from: image.order,
+        })
+        .orderBy('`order`', 'DESC')
+        .execute();
+      await manager.update(ProductImage, { id: image.id }, { order: 0 });
+    });
+
+    await this.catalogCache.invalidate(CatalogCacheScope.Products);
+    return this.findOne(productId, { includeDrafts: true });
+  }
+
   // Bookmarks used to be write-only: rows went in and nothing ever read
   // them back, so a signed-in customer's favourites vanished on refresh.
   async listBookmarkedProductIds(userId: number): Promise<number[]> {
@@ -753,19 +824,21 @@ export class ProductsService {
     );
   }
 
-  addProductToBasket(userId: number, createDto: CreateBookmarkDto) {
+  addProductToBasket(userId: number, dto: BasketItemDto) {
     return this.usersService.addProductToBasket(
       userId,
-      createDto.product_id,
-      createDto.variant_id,
+      dto.product_id,
+      dto.variant_id,
+      dto.quantity,
     );
   }
 
-  removeProductFromBasket(userId: number, createDto: CreateBookmarkDto) {
+  removeProductFromBasket(userId: number, dto: BasketItemDto) {
     return this.usersService.removeProductFromBasket(
       userId,
-      createDto.product_id,
-      createDto.variant_id,
+      dto.product_id,
+      dto.variant_id,
+      dto.quantity,
     );
   }
 
@@ -999,8 +1072,11 @@ export class ProductsService {
         id: Not(variantId),
       },
     });
+    // With its own code: as a bare 409 the panel said "this already
+    // exists", which says nothing about what to do.
     if (others === 0) {
-      throw new ConflictException(
+      throw AppError.conflict(
+        ErrorCodes.LAST_ACTIVE_VARIANT,
         'This is the last option of the product - unpublish the product instead of leaving it unbuyable',
       );
     }

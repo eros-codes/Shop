@@ -149,6 +149,18 @@ export default function Layout() {
     };
   }, [ready, isAuthenticated]);
 
+  const title =
+    TITLES[location.pathname] ??
+    Object.entries(TITLES).find(
+      ([path]) => path !== '/' && location.pathname.startsWith(path),
+    )?.[1] ??
+    'پنل مدیریت';
+
+  // Every tab of the panel used to be called the same thing.
+  useEffect(() => {
+    document.title = `${title} | پنل مدیریت تل‌کال`;
+  }, [title]);
+
   if (!ready) {
     return (
       <div style={{ padding: 40 }}>
@@ -160,13 +172,6 @@ export default function Layout() {
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
-
-  const title =
-    TITLES[location.pathname] ??
-    Object.entries(TITLES).find(
-      ([path]) => path !== '/' && location.pathname.startsWith(path),
-    )?.[1] ??
-    'پنل مدیریت';
 
   return (
     <div className="shell">

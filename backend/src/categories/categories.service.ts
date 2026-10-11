@@ -19,6 +19,8 @@ import {
   CatalogCacheScope,
   CatalogCacheService,
 } from '../common/cache/catalog-cache.service';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 export interface CategoryNode {
   id: number;
@@ -83,16 +85,27 @@ export class CategoriesService {
     updateCategoryDto: UpdateCategoryDto,
   ): Promise<Category> {
     const { title, slug, parentId } = updateCategoryDto;
-    const changes: Partial<Category> = {};
+    const changes: Partial<Omit<Category, 'parent'>> & {
+      parent?: Category | null;
+    } = {};
     if (title !== undefined) changes.title = title;
     if (slug !== undefined) changes.slug = this.buildSlug(slug, slug);
-    if (parentId !== undefined) {
+    // null moves it back to the top level. It used to be looked up as a
+    // category id like any other and answered 404, so a sub-category could
+    // never be made a top-level one again.
+    if (parentId === null) {
+      changes.parent = null;
+    } else if (parentId !== undefined) {
       if (parentId === id) {
-        throw new BadRequestException('A category cannot be its own parent');
+        throw AppError.badRequest(
+          ErrorCodes.CATEGORY_LOOP,
+          'A category cannot be its own parent',
+        );
       }
       const descendants = await this.getDescendantIds(id);
       if (descendants.includes(parentId)) {
-        throw new BadRequestException(
+        throw AppError.badRequest(
+          ErrorCodes.CATEGORY_LOOP,
           'That parent sits under this category - moving it there would create a loop',
         );
       }
@@ -126,8 +139,10 @@ export class CategoriesService {
       where: { parent: { id }, deleted_at: IsNull() },
     });
     if (children > 0) {
-      throw new ConflictException(
+      throw AppError.conflict(
+        ErrorCodes.CATEGORY_HAS_CHILDREN,
         `This category still has ${children} sub-categories - move or delete them first`,
+        { count: children },
       );
     }
 
@@ -160,8 +175,10 @@ export class CategoriesService {
           where: { parent: { id }, deleted_at: IsNull() },
         });
         if (children > 0) {
-          throw new ConflictException(
+          throw AppError.conflict(
+            ErrorCodes.CATEGORY_HAS_CHILDREN,
             `This category still has ${children} sub-categories - move or delete them first`,
+            { count: children },
           );
         }
 

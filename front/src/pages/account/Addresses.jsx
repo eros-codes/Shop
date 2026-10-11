@@ -5,6 +5,8 @@ import { useToast } from '../../context/ToastContext';
 import { translateError } from '../../lib/errorMessages';
 import { Button, EmptyState, Field } from '../../components/ui/Primitives';
 import { useFieldErrors } from '../../lib/useFieldErrors';
+import { PROVINCES } from '../../lib/provinces';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 export default function Addresses() {
   const toast = useToast();
@@ -12,6 +14,10 @@ export default function Addresses() {
   const [addresses, setAddresses] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  // One tap on "delete" removed the address at once; on a phone that is
+  // easily the thumb on its way to scroll.
+  const [confirming, setConfirming] = useState(null);
+  usePageTitle('آدرس‌های من');
 
   const load = () => {
     api
@@ -57,6 +63,7 @@ export default function Addresses() {
     try {
       await api.delete(`/addresses/${id}`, undefined, { auth: true });
       toast.success('آدرس حذف شد');
+      setConfirming(null);
       load();
     } catch (error) {
       toast.error(translateError(error));
@@ -79,7 +86,16 @@ export default function Addresses() {
           <div className="grid auto-grid">
             <Field label="استان"
                 error={fieldErrors.of('province')}>
-              <input className="input" name="province" required />
+              <select className="select" name="province" defaultValue="" required>
+                <option value="" disabled>
+                  انتخاب کنید…
+                </option>
+                {PROVINCES.map((province) => (
+                  <option key={province} value={province}>
+                    {province}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="شهر"
                 error={fieldErrors.of('city')}>
@@ -126,10 +142,25 @@ export default function Addresses() {
                 کد پستی {address.postal_code} — {address.receiver_mobile}
               </div>
             </div>
-            <button className="btn btn-danger btn-sm" onClick={() => remove(address.id)}>
-              <Trash2 size={14} />
-              حذف
-            </button>
+            {confirming === address.id ? (
+              <div className="row" style={{ gap: 6 }}>
+                <button className="btn btn-danger btn-sm" onClick={() => remove(address.id)}>
+                  حذف شود
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setConfirming(null)}>
+                  انصراف
+                </button>
+              </div>
+            ) : (
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setConfirming(address.id)}
+                aria-label="حذف آدرس"
+              >
+                <Trash2 size={14} />
+                حذف
+              </button>
+            )}
           </div>
         ))
       )}

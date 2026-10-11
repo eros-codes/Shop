@@ -3,7 +3,16 @@ import { Percent, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
-import { formatDate, formatToman } from '../lib/format';
+import {
+  formatDate,
+  formatToman,
+  numberOrNull,
+  tehranDateInput,
+  tehranDayEnd,
+  tehranDayStart,
+  toAsciiDigits,
+  toPersianDigits,
+} from '../lib/format';
 import { useFieldErrors } from '../lib/useFieldErrors';
 import {
   Button,
@@ -15,7 +24,6 @@ import {
   TableSkeleton,
 } from '../components/Primitives';
 
-const toDateInput = (value) => (value ? String(value).slice(0, 10) : '');
 
 export default function Discounts() {
   const toast = useToast();
@@ -55,28 +63,28 @@ export default function Discounts() {
   const save = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const isEdit = !!editing.id;
+    // An optional limit left empty. On a new code it is simply not sent;
+    // on an existing one it is sent as null, so emptying the box actually
+    // removes the limit - it used to be left out and the old one stayed.
+    const optional = (key, value) =>
+      value !== null ? { [key]: value } : isEdit ? { [key]: null } : {};
     const payload = {
-      code: String(form.get('code') ?? '').toUpperCase(),
-      capacity: Number(form.get('capacity')),
+      code: toAsciiDigits(String(form.get('code') ?? '')).trim().toUpperCase(),
+      capacity: numberOrNull(form.get('capacity')),
       type,
+      status: form.get('status') || 'active',
       ...(type === 'percent'
-        ? { off_percent: Number(form.get('off_percent')) }
-        : { off_amount: Number(form.get('off_amount')) }),
-      ...(form.get('max_discount_amount')
-        ? { max_discount_amount: Number(form.get('max_discount_amount')) }
-        : {}),
-      ...(form.get('min_order_amount')
-        ? { min_order_amount: Number(form.get('min_order_amount')) }
-        : {}),
-      ...(form.get('per_user_limit')
-        ? { per_user_limit: Number(form.get('per_user_limit')) }
-        : {}),
-      ...(form.get('starts_at')
-        ? { starts_at: new Date(form.get('starts_at')).toISOString() }
-        : {}),
-      ...(form.get('expires_at')
-        ? { expires_at: new Date(form.get('expires_at')).toISOString() }
-        : {}),
+        ? { off_percent: numberOrNull(form.get('off_percent')) }
+        : { off_amount: numberOrNull(form.get('off_amount')) }),
+      ...optional('max_discount_amount', numberOrNull(form.get('max_discount_amount'))),
+      ...optional('min_order_amount', numberOrNull(form.get('min_order_amount'))),
+      ...optional('per_user_limit', numberOrNull(form.get('per_user_limit'))),
+      // The days are Tehran days: from its first second to its last. A bare
+      // date used to become UTC midnight, so a campaign "until the 20th"
+      // stopped at 03:30 on the 20th.
+      ...optional('starts_at', tehranDayStart(form.get('starts_at'))),
+      ...optional('expires_at', tehranDayEnd(form.get('expires_at'))),
       categoryIds: [...(form.getAll('categoryIds') ?? [])].map(Number).filter(Boolean),
     };
 
@@ -94,7 +102,7 @@ export default function Discounts() {
       setEditing(null);
       load();
     } catch (error) {
-      if (fieldErrors.capture(error, ['code', 'type', 'capacity', 'off_percent', 'off_amount', 'max_discount_amount', 'min_order_amount', 'starts_at', 'expires_at', 'per_user_limit'])) {
+      if (fieldErrors.capture(error, ['code', 'type', 'status', 'capacity', 'off_percent', 'off_amount', 'max_discount_amount', 'min_order_amount', 'starts_at', 'expires_at', 'per_user_limit'])) {
         toast.error('چند مورد از فرم نیاز به اصلاح دارد.');
       } else {
         toast.error(translateError(error));
@@ -155,11 +163,18 @@ export default function Discounts() {
               <tbody>
                 {codes.map((code) => (
                   <tr key={code.id}>
-                    <td className="strong">{code.code}</td>
+                    <td className="strong">
+                      <bdi>{code.code}</bdi>
+                      {code.status === 'inactive' ? (
+                        <div>
+                          <span className="badge badge-muted">غیرفعال</span>
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="small">
                       {code.type === 'fixed'
                         ? formatToman(code.off_amount)
-                        : `٪${code.off_percent}`}
+                        : `٪${toPersianDigits(code.off_percent)}`}
                       {code.max_discount_amount ? (
                         <div className="tiny muted">
                           سقف {formatToman(code.max_discount_amount)}
@@ -240,7 +255,7 @@ export default function Discounts() {
                 </select>
               </Field>
               <Field label="ظرفیت کل"
-            error={fieldErrors.of('capacity')}>
+            error={fieldErrors.of('capacity')} hint="چند بار در کل استفاده شود">
                 <input
                   className="input"
                   name="capacity"
@@ -302,7 +317,7 @@ export default function Discounts() {
                   className="input"
                   type="date"
                   name="starts_at"
-                  defaultValue={toDateInput(editing.starts_at)}
+                  defaultValue={tehranDateInput(editing.starts_at)}
                 />
               </Field>
               <Field label="پایان کمپین"
@@ -311,7 +326,7 @@ export default function Discounts() {
                   className="input"
                   type="date"
                   name="expires_at"
-                  defaultValue={toDateInput(editing.expires_at)}
+                  defaultValue={tehranDateInput(editing.expires_at)}
                 />
               </Field>
               <Field label="سقف استفاده هر کاربر"
@@ -324,6 +339,14 @@ export default function Discounts() {
                 />
               </Field>
             </div>
+
+            {/* A code could only be switched off by deleting it. */}
+            <Field label="وضعیت" error={fieldErrors.of('status')}>
+              <select className="select" name="status" defaultValue={editing.status ?? 'active'}>
+                <option value="active">فعال</option>
+                <option value="inactive">غیرفعال</option>
+              </select>
+            </Field>
 
             <Field
               label="محدود به دسته‌بندی‌ها"

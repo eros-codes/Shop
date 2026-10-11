@@ -5,16 +5,24 @@ import { api } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 import { formatToman } from '../../lib/format';
 import { ORDER_STATUS } from './orderStatus';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 export default function Dashboard() {
   const { user } = useAuth();
   const [orders, setOrders] = useState([]);
+  // How many there are in all. The card used to count the five fetched for
+  // the list below, so every customer with more than five orders had "۵".
+  const [orderCount, setOrderCount] = useState(0);
   const [wallet, setWallet] = useState(null);
+  usePageTitle('حساب کاربری');
 
   useEffect(() => {
     api
       .get('/orders?limit=5', { auth: true })
-      .then((data) => setOrders(data?.items ?? []))
+      .then((data) => {
+        setOrders(data?.items ?? []);
+        setOrderCount(data?.total ?? data?.items?.length ?? 0);
+      })
       .catch(() => setOrders([]));
 
     if (user?.id) {
@@ -34,7 +42,7 @@ export default function Dashboard() {
             <div>
               <div className="tiny muted">سفارش‌های من</div>
               <div className="strong" style={{ fontSize: 18 }}>
-                {orders.length.toLocaleString('fa-IR')}
+                {orderCount.toLocaleString('fa-IR')}
               </div>
             </div>
           </div>

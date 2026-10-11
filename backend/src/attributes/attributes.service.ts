@@ -25,6 +25,8 @@ import { isDuplicateEntryError } from '../common/database/mysql-errors';
 import { Category } from '../categories/entities/category.entity';
 import { ProductVariant } from '../products/entities/product-variant.entity';
 import { Product } from '../products/entities/product.entity';
+import { AppError } from '../common/errors/app-error';
+import { ErrorCodes } from '../common/errors/error-codes';
 
 // Attributes that can split a product into separately priced, separately
 // counted variants. The other types describe a product but never divide
@@ -126,8 +128,10 @@ export class AttributesService {
         where: { attribute: { id } },
       });
       if (inUse > 0) {
-        throw new ConflictException(
+        throw AppError.conflict(
+          ErrorCodes.ATTRIBUTE_IN_USE,
           `${inUse} variants are built on this attribute - it cannot change while they exist`,
+          { count: inUse },
         );
       }
     }
@@ -156,8 +160,10 @@ export class AttributesService {
       where: { attribute: { id } },
     });
     if (inUse > 0) {
-      throw new ConflictException(
+      throw AppError.conflict(
+        ErrorCodes.ATTRIBUTE_IN_USE,
         `${inUse} variants are built on this attribute - it cannot be deleted while they exist`,
+        { count: inUse },
       );
     }
     const result = await this.attributes.softDelete({ id });
@@ -239,8 +245,10 @@ export class AttributesService {
       where: { option: { id: optionId } },
     });
     if (inUse > 0) {
-      throw new ConflictException(
+      throw AppError.conflict(
+        ErrorCodes.OPTION_IN_USE,
         `${inUse} variants use this value - remove them first`,
+        { count: inUse },
       );
     }
     await this.options.softDelete({ id: optionId });

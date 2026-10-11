@@ -7,7 +7,7 @@ import {
   Headphones,
   Laptop,
   RotateCcw,
-  ShieldCheck,
+  CreditCard,
   Smartphone,
   Sparkles,
   Tablet,
@@ -17,10 +17,14 @@ import {
   Package,
 } from 'lucide-react';
 import { api, buildQuery } from '../lib/api';
+import { usePageTitle } from '../lib/usePageTitle';
 import { useCatalog } from '../context/CatalogContext';
 import ProductCard from '../components/product/ProductCard';
 import { ConnectionError, SkeletonCard } from '../components/ui/Primitives';
-import { coverImage } from '../lib/format';
+import {
+  coverImage,
+  returnWindowLabel,
+} from '../lib/format';
 
 // Banner artwork lives in `public/banners/`: drop a file there and name
 // it here. Anything in `public/` is served as-is at the same path, so
@@ -31,7 +35,7 @@ const SLIDES = [
   {
     eyebrow: 'فراتر از تصور',
     title: 'iPhone 17 Pro Max',
-    sub: 'قدرت جدید در دستان شما — با ضمانت اصالت و ارسال سریع از تل‌کال.',
+    sub: 'قدرت جدید در دستان شما — با ارسال سریع از تل‌کال.',
     cta: 'مشاهده و خرید',
     to: '/products?search=iphone',
     image: '/banners/iphone-17-pro-max.png',
@@ -40,7 +44,7 @@ const SLIDES = [
   {
     eyebrow: 'کار و خلاقیت',
     title: 'لپ‌تاپ‌های حرفه‌ای',
-    sub: 'از اولترابوک‌های سبک تا ورک‌استیشن‌های قدرتمند، با پشتیبانی ۲۴ ساعته.',
+    sub: 'از اولترابوک‌های سبک تا ورک‌استیشن‌های قدرتمند.',
     cta: 'دیدن لپ‌تاپ‌ها',
     to: '/products?search=laptop',
     image: '/banners/laptops.png',
@@ -49,7 +53,7 @@ const SLIDES = [
   {
     eyebrow: 'همراه همیشگی',
     title: 'گجت‌های هوشمند',
-    sub: 'ساعت هوشمند، هندزفری و لوازم جانبی اصل، با قیمت واقعی.',
+    sub: 'ساعت هوشمند، هندزفری و لوازم جانبی.',
     cta: 'دیدن گجت‌ها',
     to: '/products?sortBy=best_selling',
     image: '/banners/gadgets.png',
@@ -59,12 +63,13 @@ const SLIDES = [
 
 const TILE_ICONS = [Smartphone, Laptop, Tablet, Watch, Headset, Package];
 
-const TRUST = [
-  { icon: Truck, title: 'ارسال سریع', sub: 'به سراسر ایران' },
-  { icon: ShieldCheck, title: 'ضمانت اصالت کالا', sub: 'خرید مطمئن' },
-  { icon: RotateCcw, title: '۷ روز ضمانت بازگشت', sub: 'بدون قید و شرط' },
-  { icon: Headphones, title: 'پشتیبانی ۲۴ ساعته', sub: 'همیشه در کنار شما' },
-];
+const trustBadges = (returnDays) =>
+  [
+    { icon: Truck, title: 'ارسال سریع', sub: 'به سراسر ایران' },
+    { icon: CreditCard, title: 'پرداخت آنلاین', sub: 'درگاه بانکی زرین‌پال' },
+    { icon: RotateCcw, title: returnWindowLabel(returnDays), sub: 'طبق شرایط مرجوعی' },
+    { icon: Headphones, title: 'پشتیبانی آنلاین', sub: 'ثبت تیکت در حساب کاربری' },
+  ].filter((item) => item.title);
 
 function useProducts(query) {
   const [state, setState] = useState({ items: [], loading: true, failed: false });
@@ -128,7 +133,8 @@ function Row({ title, icon, link, products, loading, failed }) {
 }
 
 export default function Home() {
-  const { categories, brands } = useCatalog();
+  usePageTitle(null);
+  const { categories, brands, shop } = useCatalog();
   const [slide, setSlide] = useState(0);
   // Image URLs that failed to load. Kept as state rather than hiding the
   // <img> in place: the banner file 404s before the product photos have
@@ -264,7 +270,7 @@ export default function Home() {
       ) : null}
 
       <div className="trust">
-        {TRUST.map((item) => (
+        {trustBadges(shop.returnWindowDays).map((item) => (
           <div className="trust-item" key={item.title}>
             <item.icon size={26} />
             <div>

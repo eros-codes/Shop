@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Check, Headphones, Package, RotateCcw, Truck } from 'lucide-react';
+import { Ban, Check, Headphones, Package, RotateCcw, Truck } from 'lucide-react';
 import { api, buildQuery } from '../../lib/api';
 import { useToast } from '../../context/ToastContext';
 import { translateError } from '../../lib/errorMessages';
-import { formatDateTime, formatToman } from '../../lib/format';
+import { formatDateTime, formatToman, toPersianDigits } from '../../lib/format';
+import { usePageTitle } from '../../lib/usePageTitle';
+import { useCatalog } from '../../context/CatalogContext';
 import { Button, EmptyState } from '../../components/ui/Primitives';
-import { ORDER_STATUS, TIMELINE } from './orderStatus';
+import { COD_TIMELINE, ORDER_STATUS, TIMELINE } from './orderStatus';
 
 const TIMELINE_LABELS = {
+  pending: 'ثبت سفارش',
   paid: 'پرداخت',
   processing: 'آماده‌سازی',
   sent: 'ارسال',
@@ -25,6 +28,10 @@ export default function OrderDetail() {
   const [reason, setReason] = useState('damaged');
   const [description, setDescription] = useState('');
   const [sending, setSending] = useState(false);
+  const { shop } = useCatalog();
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  usePageTitle(order ? `سفارش ${order.invoice_number ?? `#${order.id}`}` : 'سفارش');
 
   const load = () => {
     setLoading(true);
@@ -57,8 +64,30 @@ export default function OrderDetail() {
   }
 
   const status = ORDER_STATUS[order.status] ?? { label: order.status, tone: 'muted' };
-  const currentStep = TIMELINE.indexOf(order.status);
+  const cod = order.payment_method === 'cash_on_delivery';
+  const steps = cod ? COD_TIMELINE : TIMELINE;
+  // A COD order paid ahead of shipping is still at the first step.
+  const currentStep = steps.indexOf(cod && order.status === 'paid' ? 'pending' : order.status);
   const cancelled = order.status === 'cancelled';
+
+  // Only an order the shop has not touched yet - cash on delivery, still
+  // waiting - can be called off by the customer. The API turns this DELETE
+  // into a cancellation: the order stays on record, the stock goes back.
+  const cancelOrder = async () => {
+    setCancelling(true);
+    try {
+      const updated = await api.delete(`/orders/${order.id}`, undefined, { auth: true });
+      toast.success('سفارش لغو شد');
+      setConfirmCancel(false);
+      if (updated?.id) setOrder(updated);
+      else load();
+    } catch (error) {
+      toast.error(translateError(error));
+      load();
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const submitReturn = async (event) => {
     event.preventDefault();
@@ -109,14 +138,14 @@ export default function OrderDetail() {
 
         {!cancelled ? (
           <div className="timeline">
-            {TIMELINE.map((step, index) => (
+            {steps.map((step, index) => (
               <div
                 className="timeline-step"
                 key={step}
                 data-done={currentStep >= index}
               >
                 <span className="timeline-dot">
-                  {currentStep >= index ? <Check size={14} /> : index + 1}
+                  {currentStep >= index ? <Check size={14} /> : toPersianDigits(index + 1)}
                 </span>
                 {TIMELINE_LABELS[step]}
               </div>
@@ -129,7 +158,7 @@ export default function OrderDetail() {
             <Truck size={20} color="var(--brand-600)" />
             <div>
               <div className="small strong">
-                کد رهگیری مرسوله: {order.tracking_code}
+                کد رهگیری مرسوله: <bdi>{order.tracking_code}</bdi>
               </div>
               {order.shipping_method_title ? (
                 <div className="tiny muted">
@@ -155,12 +184,18 @@ export default function OrderDetail() {
               <Package size={22} color="var(--ink-300)" />
             </div>
             <div className="stack" style={{ gap: 4 }}>
-              <Link
-                to={`/product/${item.product?.slug ?? item.product?.id}`}
-                className="strong small"
-              >
-                {item.product?.title}
-              </Link>
+              {item.product ? (
+                <Link
+                  to={`/product/${item.product.slug ?? item.product.id}`}
+                  className="strong small"
+                >
+                  {item.product.title}
+                </Link>
+              ) : (
+                // A product the shop has since removed: the line is still
+                // part of what was bought, it just has nowhere to link to.
+                <span className="strong small">{item.variant_title ?? 'کالای حذف‌شده'}</span>
+              )}
               {item.variant_title ? (
                 <span className="badge badge-muted" style={{ alignSelf: 'flex-start' }}>
                   {item.variant_title}
@@ -218,7 +253,7 @@ export default function OrderDetail() {
         </div>
       </div>
 
-      {order.status === 'delivered' ? (
+      {order.status === 'delivered' && shop.returnWindowDays !== 0 ? (
         <div className="card card-pad">
           <div className="spread" style={{ marginBottom: returnMode ? 14 : 0 }}>
             <h2 className="row" style={{ fontSize: 16, fontWeight: 700, gap: 8 }}>
@@ -287,9 +322,37 @@ export default function OrderDetail() {
             </form>
           ) : (
             <p className="small muted" style={{ marginTop: 8 }}>
-              تا ۷ روز پس از تحویل می‌توانید کالا را مرجوع کنید. مبلغ کالا و مالیات
-              آن پس از دریافت و بررسی به کیف پول شما برمی‌گردد.
+              {shop.returnWindowDays
+                ? `تا ${toPersianDigits(shop.returnWindowDays)} روز پس از تحویل`
+                : 'در مهلت مرجوعی پس از تحویل'}{' '}
+              می‌توانید کالا را مرجوع کنید. مبلغ کالا و مالیات آن پس از دریافت و
+              بررسی به کیف پول شما برمی‌گردد.
             </p>
+          )}
+        </div>
+      ) : null}
+
+      {order.status === 'pending' ? (
+        <div className="card card-pad spread" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <span className="row small" style={{ gap: 8 }}>
+            <Ban size={18} color="var(--danger-600)" />
+            {confirmCancel
+              ? 'این سفارش لغو شود؟'
+              : 'تا پیش از آماده‌سازی می‌توانید این سفارش را لغو کنید.'}
+          </span>
+          {confirmCancel ? (
+            <div className="row" style={{ gap: 6 }}>
+              <Button variant="danger" size="sm" loading={cancelling} onClick={cancelOrder}>
+                بله، لغو شود
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmCancel(false)}>
+                انصراف
+              </Button>
+            </div>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={() => setConfirmCancel(true)}>
+              لغو سفارش
+            </Button>
           )}
         </div>
       ) : null}

@@ -12,12 +12,14 @@ import { WalletChargeRequest } from './entities/wallet-charge-request.entity';
 import { WalletTransaction } from './entities/wallet-transaction.entity';
 import WalletTransactionTypeEnum from './enums/wallet-transaction-type.enum';
 import { AdjustWalletDto } from './dto/adjust-wallet.dto';
+import { AdminAdjustWalletDto } from './dto/admin-adjust-wallet.dto';
 import { UsersService } from '../users/users.service';
 import { ZarinpalService } from '../payments/zarinpal.service';
 import { MAX_MONEY_AMOUNT } from '../common/constants/money';
 import { AuditActor, AuditService } from '../audit/audit.service';
 import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
+import { PaginatedResult } from '../common/interfaces/paginated-result.interface';
 
 @Injectable()
 export class WalletsService {
@@ -121,6 +123,26 @@ export class WalletsService {
     return await this.walletRepository.find({ relations: { user: true } });
   }
 
+  // The customer's statement: every movement in and out, newest first.
+  // The wallet page used to read `wallet.transactions`, which no endpoint
+  // ever sent - so a customer refunded to their wallet had no way to see
+  // where the money came from or went.
+  async findTransactions(
+    walletId: number,
+    page: number,
+    limit: number,
+  ): Promise<PaginatedResult<WalletTransaction>> {
+    const [items, total] = await this.dataSource
+      .getRepository(WalletTransaction)
+      .findAndCount({
+        where: { wallet: { id: walletId } },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
   async findOne(id: number): Promise<Wallet> {
     const wallet = await this.walletRepository.findOne({
       where: { id },
@@ -145,7 +167,7 @@ export class WalletsService {
 
   async adminCharge(
     id: number,
-    dto: AdjustWalletDto,
+    dto: AdminAdjustWalletDto,
     actor?: AuditActor,
   ): Promise<Wallet> {
     const wallet = await this.withLockedWallet(
@@ -161,7 +183,7 @@ export class WalletsService {
           saved,
           dto.amount,
           WalletTransactionTypeEnum.AdminCharge,
-          'Manual admin adjustment',
+          dto.note || 'Manual admin adjustment',
         );
         return saved;
       },
@@ -172,7 +194,11 @@ export class WalletsService {
       entityType: 'wallet',
       entityId: id,
       actor,
-      changes: { amount: dto.amount, balance_after: wallet.amount },
+      changes: {
+        amount: dto.amount,
+        balance_after: wallet.amount,
+        ...(dto.note ? { note: dto.note } : {}),
+      },
     });
     return wallet;
   }
@@ -269,26 +295,51 @@ export class WalletsService {
     );
   }
 
-  async withdraw(id: number, dto: AdjustWalletDto): Promise<Wallet> {
-    return this.withLockedWallet(id, undefined, async (wallet, manager) => {
-      this.assertActive(wallet);
-      if (wallet.amount < dto.amount) {
-        throw AppError.badRequest(
-          ErrorCodes.INSUFFICIENT_WALLET_BALANCE,
-          'Insufficient wallet balance',
-          { balance: wallet.amount, required: dto.amount },
+  // Staff taking money out of a customer's wallet - paying the balance out
+  // to their card, or correcting a charge made by mistake. Recorded in the
+  // audit log like a manual charge; it used to leave no trace there at all.
+  async withdraw(
+    id: number,
+    dto: AdminAdjustWalletDto,
+    actor?: AuditActor,
+  ): Promise<Wallet> {
+    const wallet = await this.withLockedWallet(
+      id,
+      undefined,
+      async (wallet, manager) => {
+        this.assertActive(wallet);
+        if (wallet.amount < dto.amount) {
+          throw AppError.badRequest(
+            ErrorCodes.INSUFFICIENT_WALLET_BALANCE,
+            'Insufficient wallet balance',
+            { balance: wallet.amount, required: dto.amount },
+          );
+        }
+        wallet.amount = wallet.amount - dto.amount;
+        const saved = await manager.getRepository(Wallet).save(wallet);
+        await this.recordTransaction(
+          manager,
+          saved,
+          -dto.amount,
+          WalletTransactionTypeEnum.Withdrawal,
+          dto.note || 'Manual admin withdrawal',
         );
-      }
-      wallet.amount = wallet.amount - dto.amount;
-      const saved = await manager.getRepository(Wallet).save(wallet);
-      await this.recordTransaction(
-        manager,
-        saved,
-        -dto.amount,
-        WalletTransactionTypeEnum.Withdrawal,
-      );
-      return saved;
+        return saved;
+      },
+    );
+
+    await this.auditService.record({
+      action: 'wallet.admin_withdrawn',
+      entityType: 'wallet',
+      entityId: id,
+      actor,
+      changes: {
+        amount: dto.amount,
+        balance_after: wallet.amount,
+        ...(dto.note ? { note: dto.note } : {}),
+      },
     });
+    return wallet;
   }
 
   async withdrawByUserId(

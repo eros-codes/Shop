@@ -16,8 +16,10 @@ import {
   In,
   IsNull,
   Repository,
+  Like,
 } from 'typeorm';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { QuoteOrderDto } from './dto/quote-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { FilterOrderDto } from './dto/filter-order.dto';
@@ -61,6 +63,8 @@ import {
   MAX_OPEN_PAYMENT_SESSIONS_PER_USER,
 } from '../common/constants/money';
 import { AppError } from '../common/errors/app-error';
+import { toAsciiDigits } from '../common/validation/normalize';
+import { escapeLikePattern } from '../products/utils/product-search';
 import { ErrorCodes } from '../common/errors/error-codes';
 
 const ALLOWED_STATUS_TRANSITIONS: Record<OrderStatusEnum, OrderStatusEnum[]> = {
@@ -92,6 +96,38 @@ const CANCELLABLE_WITH_STOCK_RESTORE = [
 ];
 
 const REFUNDABLE_ON_CANCEL = [OrderStatusEnum.Paid, OrderStatusEnum.Processing];
+
+// Cash on delivery is paid at the door, not before - and the table above
+// was written for orders paid up front. Two steps are added for it:
+//  - pending -> processing: the shop confirms the order and starts on it.
+//    The only way forward used to be "paid", so every COD order was marked
+//    paid before it left the building - and cancelling one after that
+//    refunded the whole amount to the customer's wallet, money the shop
+//    had never received;
+//  - sent -> cancelled, while still unpaid: the customer refused the
+//    parcel and it comes back. Such an order used to sit in "sent" for
+//    good, its stock never returned.
+function allowedNextStatuses(order: Order): OrderStatusEnum[] {
+  const base = ALLOWED_STATUS_TRANSITIONS[order.status] ?? [];
+  if (order.payment_method !== PaymentMethodEnum.CashOnDelivery) return base;
+  if (order.status === OrderStatusEnum.Pending) {
+    return [...base, OrderStatusEnum.Processing];
+  }
+  if (order.status === OrderStatusEnum.Sent && !order.payed_time) {
+    return [...base, OrderStatusEnum.Cancelled];
+  }
+  return base;
+}
+
+// Whether the shop has the order's money. A COD order has it once the
+// courier has collected it (payed_time is set on delivery, or when the
+// admin records an early payment).
+function moneyReceived(order: Order): boolean {
+  return (
+    order.payment_method !== PaymentMethodEnum.CashOnDelivery ||
+    !!order.payed_time
+  );
+}
 
 const DEFAULT_COD_MAX_AMOUNT = 20_000_000;
 
@@ -158,6 +194,28 @@ export interface CreateOrderResult {
 }
 
 export type PaymentOutcome = 'paid' | 'already_paid' | 'refunded';
+
+export interface OrderQuote {
+  items_total: number;
+  discount_amount: number;
+  shipping_cost: number;
+  tax_amount: number;
+  cod_fee: number;
+  total_price: number;
+  total_quantity: number;
+  shippingMethodId: number | null;
+  // The code as sent, whether it took, and if not, why - in the same
+  // code/message shape as any other error, for the page to translate.
+  discount: {
+    code: string;
+    applied: boolean;
+    error?: {
+      code: string;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+  } | null;
+}
 
 @Injectable()
 export class OrdersService {
@@ -291,20 +349,148 @@ export class OrdersService {
     };
   }
 
+  private insufficientStock(
+    product: Product,
+    variant: ProductVariant,
+    requested: number,
+  ): AppError {
+    return AppError.badRequest(
+      ErrorCodes.INSUFFICIENT_STOCK,
+      `${product.title} (${variant.title}) does not have enough stock`,
+      {
+        productId: product.id,
+        variantId: variant.id,
+        // The titles travel with the error so a client can name the
+        // offending line. In a multi-line basket "out of stock" on its own
+        // leaves the customer guessing which item to remove.
+        productTitle: product.title,
+        variantTitle: variant.title,
+        available: variant.stock,
+        requested,
+      },
+    );
+  }
+
+  // What placing this basket would cost, priced by the same code create()
+  // uses - without creating, reserving or locking anything. Checkout shows
+  // it before the customer commits: a wallet payment is taken the moment
+  // the order is placed, so the amount on the button has to be the amount
+  // taken. The page used to estimate it, with the tax rate guessed at 10%
+  // and a discount code's effect unknown until after the money had moved.
+  //
+  // A discount code that does not apply does not fail the quote: the price
+  // comes back without it and the reason travels alongside, so the page can
+  // say why. Everything else that would stop the order (stock, a shipping
+  // method that does not serve the address, the cash-on-delivery ceiling)
+  // fails it the same way create() would.
+  async quote(userId: number, dto: QuoteOrderDto): Promise<OrderQuote> {
+    const manager = this.dataSource.manager;
+
+    const address = await manager.getRepository(Address).findOne({
+      where: { id: dto.addressId },
+      relations: { user: true },
+    });
+    if (!address || address.user?.id !== userId) {
+      throw new NotFoundException(`Address with id ${dto.addressId} not found`);
+    }
+
+    const productIds = dto.items.map((item) => item.productId);
+    const products = await manager
+      .getRepository(Product)
+      .find({ where: { id: In(productIds) } });
+    if (products.length !== new Set(productIds).size) {
+      throw new BadRequestException('One or more product IDs are invalid');
+    }
+    this.assertAllForSale(products);
+
+    const resolved = await this.resolveVariants(manager, dto.items, products, {
+      lock: false,
+    });
+    const lines = dto.items.map((item, index) => {
+      const { product, variant } = resolved[index];
+      if (variant.stock < item.quantity) {
+        throw this.insufficientStock(product, variant, item.quantity);
+      }
+      return {
+        price: variant.effectivePrice(product),
+        quantity: item.quantity,
+      };
+    });
+
+    let discountAmount = 0;
+    let discount: OrderQuote['discount'] = null;
+    if (dto.discountCode) {
+      try {
+        const result = await this.discountCodesService.quoteForOrder({
+          code: dto.discountCode,
+          userId,
+          lines: await this.toDiscountLines(manager, dto.items, lines),
+        });
+        discountAmount = result.amount;
+        discount = { code: dto.discountCode, applied: true };
+      } catch (error) {
+        if (!(error instanceof AppError)) throw error;
+        discount = {
+          code: dto.discountCode,
+          applied: false,
+          error: {
+            code: error.code,
+            message: error.message,
+            ...(error.details ? { details: error.details } : {}),
+          },
+        };
+      }
+    }
+
+    const weightGrams = resolved.reduce(
+      (total, entry, index) =>
+        total +
+        entry.variant.weightGrams(entry.product) * dto.items[index].quantity,
+      0,
+    );
+    const totals = await this.priceOrder({
+      lines,
+      discountAmount,
+      province: address.province,
+      weightGrams,
+      shippingMethodId: dto.shippingMethodId,
+      cashOnDelivery: !!dto.payOnDelivery,
+    });
+
+    return {
+      items_total: totals.items_total,
+      discount_amount: totals.discount_amount,
+      shipping_cost: totals.shipping_cost,
+      tax_amount: totals.tax_amount,
+      cod_fee: totals.cod_fee,
+      total_price: totals.total_price,
+      total_quantity: totals.total_quantity,
+      shippingMethodId: totals.shipping?.methodId ?? null,
+      discount,
+    };
+  }
+
   private applyDiscount(total: number, discount?: DiscountCode | null): number {
     if (!discount) return total;
     return Math.round(total - (total * discount.off_percent) / 100);
   }
 
+  // Everything that changes what gets bought or how it is paid. A key
+  // reused with a different payload is refused (409) - it used to leave
+  // out the option, the shipping method and cash on delivery, so a retry
+  // that switched the colour or the courier was handed back the first
+  // order as if it were the same request.
   private fingerprintOf(dto: CreateOrderDto): string {
     const canonical = JSON.stringify({
       addressId: dto.addressId,
       discountCode: dto.discountCode ?? null,
       payWithWallet: !!dto.payWithWallet,
       payWithZarinpal: !!dto.payWithZarinpal,
+      payOnDelivery: !!dto.payOnDelivery,
+      shippingMethodId: dto.shippingMethodId ?? null,
       items: [...dto.items]
-        .map((item) => [item.productId, item.quantity])
-        .sort((a, b) => a[0] - b[0] || a[1] - b[1]),
+        .map((item) => [item.productId, item.variantId ?? 0, item.quantity])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]),
     });
     return createHash('sha256').update(canonical).digest('hex');
   }
@@ -400,21 +586,7 @@ export class OrdersService {
         const orderItems = items.map((item, index) => {
           const { product, variant } = resolved[index];
           if (variant.stock < item.quantity) {
-            throw AppError.badRequest(
-              ErrorCodes.INSUFFICIENT_STOCK,
-              `${product.title} (${variant.title}) does not have enough stock`,
-              {
-                productId: product.id,
-                variantId: variant.id,
-                // The titles travel with the error so a client can name the
-                // offending line. In a multi-line basket "out of stock" on
-                // its own leaves the customer guessing which item to remove.
-                productTitle: product.title,
-                variantTitle: variant.title,
-                available: variant.stock,
-                requested: item.quantity,
-              },
-            );
+            throw this.insufficientStock(product, variant, item.quantity);
           }
 
           variant.stock -= item.quantity;
@@ -733,14 +905,30 @@ export class OrdersService {
     isAdmin = false,
   ): Promise<PaginatedResult<Order>> {
     const { status, page, limit } = query;
+    const base = {
+      deletedAt: IsNull(),
+      ...(isAdmin ? {} : { user: { id: userId } }),
+      ...(status ? { status } : {}),
+    };
+
+    // Any of: the order's id, a piece of its invoice number, or - for
+    // staff - a piece of the customer's mobile. Persian digits are read as
+    // the same digits.
+    const term = toAsciiDigits(query.search ?? '').trim();
+    const like = Like(`%${escapeLikePattern(term)}%`);
+    const where = term
+      ? [
+          { ...base, invoice_number: like },
+          ...(/^\d+$/.test(term) && Number(term) <= 2_147_483_647
+            ? [{ ...base, id: Number(term) }]
+            : []),
+          ...(isAdmin ? [{ ...base, user: { mobile: like } }] : []),
+        ]
+      : base;
 
     const [items, total] = await this.ordersRepository.findAndCount({
       select: ORDER_SELECT,
-      where: {
-        deletedAt: IsNull(),
-        ...(isAdmin ? {} : { user: { id: userId } }),
-        ...(status ? { status } : {}),
-      },
+      where,
       withDeleted: true,
       relations: ORDER_RELATIONS,
       order: { createdAt: 'DESC', id: 'DESC' },
@@ -1041,7 +1229,7 @@ export class OrdersService {
             `An order that is ${order.status} can no longer be cancelled - contact support`,
           );
         }
-        const allowedNext = ALLOWED_STATUS_TRANSITIONS[order.status] ?? [];
+        const allowedNext = allowedNextStatuses(order);
         if (order.status !== newStatus && !allowedNext.includes(newStatus)) {
           throw AppError.badRequest(
             ErrorCodes.INVALID_STATUS_TRANSITION,
@@ -1063,15 +1251,18 @@ export class OrdersService {
 
         let restored: number[] = [];
         if (newStatus === OrderStatusEnum.Cancelled) {
-          if (
-            CANCELLABLE_WITH_STOCK_RESTORE.includes(order.status) &&
-            order.items?.length
-          ) {
+          // A refused COD parcel comes back too (see allowedNextStatuses).
+          const goodsComeBack =
+            CANCELLABLE_WITH_STOCK_RESTORE.includes(order.status) ||
+            order.status === OrderStatusEnum.Sent;
+          if (goodsComeBack && order.items?.length) {
             restored = await restoreStock(manager, toStockLines(order.items));
           }
           await this.releaseDiscountReservation(order, manager);
+          // Only money that was actually received goes back.
           if (
             REFUNDABLE_ON_CANCEL.includes(order.status) &&
+            moneyReceived(order) &&
             order.total_price > order.refunded_amount
           ) {
             const refundAmount = order.total_price - order.refunded_amount;
@@ -1093,7 +1284,13 @@ export class OrdersService {
         if (newStatus === OrderStatusEnum.Paid && !order.payed_time) {
           order.payed_time = new Date();
         }
-        if (newStatus === OrderStatusEnum.Paid) {
+        // Counted once, when the order is first sold: on payment, or for
+        // cash on delivery when the shop takes it on without one.
+        if (
+          newStatus === OrderStatusEnum.Paid ||
+          (previousStatus === OrderStatusEnum.Pending &&
+            newStatus === OrderStatusEnum.Processing)
+        ) {
           await this.countSales(manager, order.id, 1);
         }
         if (
@@ -1105,6 +1302,10 @@ export class OrdersService {
         }
         if (newStatus === OrderStatusEnum.Delivered && !order.delivered_at) {
           order.delivered_at = new Date();
+        }
+        // The courier collected the cash at the door.
+        if (newStatus === OrderStatusEnum.Delivered && !order.payed_time) {
+          order.payed_time = new Date();
         }
         if (newStatus === OrderStatusEnum.Paid && !order.invoice_number) {
           order.invoice_number = await this.invoiceService.nextNumber(manager);
@@ -1315,10 +1516,14 @@ export class OrdersService {
     });
   }
 
+  // `lock: false` is for pricing only (quote): reading is enough there, and
+  // taking row locks for a preview would make real checkouts queue behind
+  // customers who are only looking.
   private async resolveVariants(
     manager: EntityManager,
     items: Array<{ productId: number; quantity: number; variantId?: number }>,
     products: Product[],
+    { lock = true }: { lock?: boolean } = {},
   ): Promise<Array<{ product: Product; variant: ProductVariant }>> {
     const productsById = new Map(
       products.map((product) => [product.id, product]),
@@ -1328,7 +1533,7 @@ export class OrdersService {
     const requestedIds = items
       .map((item) => item.variantId)
       .filter((id): id is number => !!id);
-    const byId = await this.lockVariants(manager, requestedIds);
+    const byId = await this.lockVariants(manager, requestedIds, lock);
 
     const defaultsNeeded = items
       .filter((item) => !item.variantId)
@@ -1351,7 +1556,7 @@ export class OrdersService {
       const chosen = [...defaults.values()]
         .filter((list) => list.length === 1)
         .map((list) => list[0].id);
-      const locked = await this.lockVariants(manager, chosen);
+      const locked = await this.lockVariants(manager, chosen, lock);
       for (const [id, variant] of locked) byId.set(id, variant);
     }
 
@@ -1411,11 +1616,22 @@ export class OrdersService {
   private async lockVariants(
     manager: EntityManager,
     variantIds: number[],
+    lock = true,
   ): Promise<Map<number, ProductVariant>> {
     const ids = [...new Set(variantIds)]
       .filter((id) => !!id)
       .sort((a, b) => a - b);
     if (ids.length === 0) return new Map();
+
+    if (!lock) {
+      const rows = await manager.getRepository(ProductVariant).find({
+        where: { id: In(ids) },
+        withDeleted: true,
+        relations: { product: true },
+        order: { id: 'ASC' },
+      });
+      return new Map(rows.map((variant) => [variant.id, variant]));
+    }
 
     const variants = await manager.getRepository(ProductVariant).find({
       where: { id: In(ids) },

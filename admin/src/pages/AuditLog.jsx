@@ -13,7 +13,9 @@ const ACTIONS = {
   'order.status_changed': 'تغییر وضعیت سفارش',
   'order.refunded_late_payment': 'بازگشت وجه پرداخت دیرهنگام',
   'wallet.admin_charged': 'شارژ دستی کیف پول',
+  'wallet.admin_withdrawn': 'برداشت دستی از کیف پول',
   'user.role_changed': 'تغییر نقش کاربر',
+  'user.created': 'ساخت حساب کاربری',
   'product.pricing_changed': 'تغییر قیمت یا موجودی کالا',
   'discount_code.created': 'ساخت کد تخفیف',
   'discount_code.updated': 'ویرایش کد تخفیف',
@@ -24,6 +26,49 @@ const ACTIONS = {
   'return.received': 'دریافت کالای مرجوعی',
   'return.refunded': 'بازپرداخت مرجوعی',
 };
+
+const FIELD_LABELS = {
+  status: 'وضعیت',
+  role: 'نقش',
+  amount: 'مبلغ',
+  balance_after: 'موجودی بعد',
+  refunded_to_wallet: 'بازگشت به کیف پول',
+  tracking_code: 'کد رهگیری',
+  price: 'قیمت',
+  sale_price: 'قیمت حراج',
+  stock: 'موجودی',
+  code: 'کد',
+  note: 'توضیح',
+  capacity: 'ظرفیت',
+  off_percent: 'درصد تخفیف',
+  off_amount: 'مبلغ تخفیف',
+};
+
+const show = (value) =>
+  value === null || value === undefined
+    ? '—'
+    : typeof value === 'number'
+      ? value.toLocaleString('fa-IR')
+      : typeof value === 'object'
+        ? JSON.stringify(value)
+        : String(value);
+
+// "status: paid → processing" rather than a line of raw JSON.
+function Changes({ changes }) {
+  if (!changes || typeof changes !== 'object') return '—';
+  return (
+    <div className="stack" style={{ gap: 2 }}>
+      {Object.entries(changes).map(([key, value]) => (
+        <div key={key}>
+          <span className="strong">{FIELD_LABELS[key] ?? key}:</span>{' '}
+          {value && typeof value === 'object' && ('from' in value || 'to' in value)
+            ? `${show(value.from)} ← ${show(value.to)}`
+            : show(value)}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function AuditLog() {
   const [result, setResult] = useState({ items: [], total: 0, totalPages: 1 });
@@ -118,7 +163,7 @@ export default function AuditLog() {
                       {entry.actor?.display_name ?? entry.actor_label ?? 'سیستم'}
                     </td>
                     <td className="tiny muted" style={{ maxWidth: 320 }}>
-                      {entry.changes ? JSON.stringify(entry.changes) : '—'}
+                      <Changes changes={entry.changes} />
                     </td>
                   </tr>
                 ))}

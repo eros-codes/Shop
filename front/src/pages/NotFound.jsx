@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom';
 import { Compass } from 'lucide-react';
 import { EmptyState } from '../components/ui/Primitives';
+import { usePageTitle } from '../lib/usePageTitle';
 
 export default function NotFound() {
+  usePageTitle('صفحه پیدا نشد');
   return (
     <div className="container page">
       <div className="card">

@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, QueryFailedError } from 'typeorm';
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { createHmac } from 'crypto';
 import { AuthService } from './auth.service';
@@ -435,7 +435,10 @@ describe('AuthService', () => {
 
       await expect(
         service.verifyOtp({ mobile: '09120000000', code: '123456' }),
-      ).rejects.toThrow(ConflictException);
+      ).rejects.toMatchObject({
+        status: 409,
+        code: ErrorCodes.MOBILE_ALREADY_REGISTERED,
+      });
     });
   });
 

@@ -26,6 +26,7 @@ import {
 } from './dto/product-variant.dto';
 import { CreateBookmarkDto } from './dto/create-bookmark.dto';
 import { MergeBasketDto } from './dto/merge-basket.dto';
+import { BasketItemDto } from './dto/basket-item.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
@@ -228,13 +229,10 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard)
   @Delete('basket')
   async removeItemFromBasket(
-    @Body() createBookmarkDto: CreateBookmarkDto,
+    @Body() dto: BasketItemDto,
     @CurrentUser() currentUser: CurrentUserPayload,
   ) {
-    await this.productsService.removeProductFromBasket(
-      currentUser.userId,
-      createBookmarkDto,
-    );
+    await this.productsService.removeProductFromBasket(currentUser.userId, dto);
     return { message: 'Product deleted from basket successfully' };
   }
 
@@ -277,6 +275,17 @@ export class ProductsController {
     return { data: product, message: 'Image removed successfully' };
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(userRoleEnum.AdminUser)
+  @Patch(':id/images/:imageId/cover')
+  async makeCoverImage(
+    @Param('id', ParseIdPipe) id: number,
+    @Param('imageId', ParseIdPipe) imageId: number,
+  ) {
+    const product = await this.productsService.makeCoverImage(id, imageId);
+    return { data: product, message: 'Cover image set' };
+  }
+
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
   @Post('bookmark')
@@ -314,12 +323,12 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard)
   @Post('basket')
   async addItmeToBasket(
-    @Body() createBookmarkDto: CreateBookmarkDto,
+    @Body() dto: BasketItemDto,
     @CurrentUser() currentUser: CurrentUserPayload,
   ) {
     const result = await this.productsService.addProductToBasket(
       currentUser.userId,
-      createBookmarkDto,
+      dto,
     );
     return { data: result, message: 'Product added to basket successfully' };
   }

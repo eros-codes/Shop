@@ -6,6 +6,52 @@ export function toPersianDigits(value) {
   return String(value ?? '').replace(/\d/g, (digit) => PERSIAN_DIGITS[Number(digit)]);
 }
 
+// The other way round, for what is typed. A Persian keyboard gives ۰-۹ (or
+// Arabic ٠-٩), and a plain /\D/ filter threw every one of them away: a
+// price typed on a Persian layout came out empty, or as NaN.
+export function toAsciiDigits(value) {
+  return String(value ?? '').replace(/[۰-۹٠-٩]/g, (digit) =>
+    String(digit.charCodeAt(0) & 0xf),
+  );
+}
+
+export function digitsOnly(value) {
+  return toAsciiDigits(value).replace(/\D/g, '');
+}
+
+// A number field read from a form: Persian digits accepted, empty is null.
+export function numberOrNull(value) {
+  const digits = digitsOnly(value);
+  return digits === '' ? null : Number(digits);
+}
+
+// The calendar day in Tehran for a stored moment, as <input type="date">
+// wants it. Slicing the ISO string gave the UTC day, which is the day
+// before for anything stored as a Tehran midnight.
+export function tehranDateInput(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tehran',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(value));
+  } catch {
+    return '';
+  }
+}
+
+// A picked day as a moment: its first second in Tehran, or its last. Iran
+// has kept +03:30 all year since 2022.
+export function tehranDayStart(day) {
+  return day ? new Date(`${day}T00:00:00+03:30`).toISOString() : null;
+}
+
+export function tehranDayEnd(day) {
+  return day ? new Date(`${day}T23:59:59+03:30`).toISOString() : null;
+}
+
 export function formatToman(amount, { withUnit = true } = {}) {
   const number = Number(amount ?? 0);
   const grouped = toPersianDigits(number.toLocaleString('en-US'));

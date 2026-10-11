@@ -1,6 +1,11 @@
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock, Wallet, XCircle } from 'lucide-react';
+import { api } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import { formatToman } from '../lib/format';
+import { usePageTitle } from '../lib/usePageTitle';
+import { ORDER_STATUS } from './account/orderStatus';
 
 // Where the API sends the customer back to after the gateway. The backend
 // decides the outcome and puts it in the query string; this page only
@@ -51,6 +56,28 @@ export default function PaymentResult({ outcome = 'success' }) {
 
   const view = OUTCOMES[outcome] ?? OUTCOMES.success;
   const Icon = view.icon;
+  usePageTitle(view.title);
+
+  // The query string is only what the gateway round trip said. Anyone can
+  // type /payment-success?amount=… into a link, so for a signed-in
+  // customer the order itself is read back and its real status and total
+  // are what the page shows.
+  const { ready, isAuthenticated } = useAuth();
+  const [order, setOrder] = useState(null);
+  useEffect(() => {
+    if (!ready || !isAuthenticated || !/^\d+$/.test(orderId ?? '')) return;
+    api
+      .get(`/orders/${orderId}`, { auth: true })
+      .then(setOrder)
+      .catch(() => setOrder(null));
+  }, [ready, isAuthenticated, orderId]);
+
+  const status = order ? ORDER_STATUS[order.status] : null;
+  const shownAmount = order
+    ? order.total_price
+    : Number.isFinite(Number(amount)) && amount !== null
+      ? Number(amount)
+      : null;
 
   return (
     <div className="container auth-wrap">
@@ -75,19 +102,25 @@ export default function PaymentResult({ outcome = 'success' }) {
           {orderId ? (
             <div className="summary-row">
               <span className="muted">شماره سفارش</span>
-              <span className="strong">{orderId}</span>
+              <bdi className="strong">{order?.invoice_number ?? orderId}</bdi>
             </div>
           ) : null}
-          {amount ? (
+          {status ? (
+            <div className="summary-row">
+              <span className="muted">وضعیت سفارش</span>
+              <span className={`badge badge-${status.tone}`}>{status.label}</span>
+            </div>
+          ) : null}
+          {shownAmount !== null ? (
             <div className="summary-row">
               <span className="muted">مبلغ</span>
-              <span className="strong">{formatToman(amount)}</span>
+              <span className="strong">{formatToman(shownAmount)}</span>
             </div>
           ) : null}
           {reference ? (
             <div className="summary-row">
               <span className="muted">کد پیگیری</span>
-              <span className="strong">{reference}</span>
+              <bdi className="strong">{reference}</bdi>
             </div>
           ) : null}
         </div>

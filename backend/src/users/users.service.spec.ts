@@ -22,6 +22,7 @@ const mockUserRepository = () => ({
   update: jest.fn(),
   softDelete: jest.fn(),
   existsBy: jest.fn(),
+  count: jest.fn().mockResolvedValue(2),
 });
 
 const mockBasketItemRepository = () => ({
@@ -41,6 +42,7 @@ describe('UsersService', () => {
   let service: UsersService;
   let userRepository: ReturnType<typeof mockUserRepository>;
   let refreshTokenRepository: ReturnType<typeof mockRefreshTokenRepository>;
+  let auditService: { record: jest.Mock };
   let manager: Record<string, jest.Mock>;
   let basketLines: Record<string, jest.Mock>;
   let basketQb: Record<string, jest.Mock>;
@@ -111,6 +113,7 @@ describe('UsersService', () => {
     service = module.get(UsersService);
     userRepository = module.get(getRepositoryToken(User));
     refreshTokenRepository = module.get(getRepositoryToken(RefreshToken));
+    auditService = module.get(AuditService);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -135,6 +138,36 @@ describe('UsersService', () => {
       expect(await bcrypt.compare('Password123', savedArg.password)).toBe(true);
     });
 
+    it('records who created the account, and with what role', async () => {
+      userRepository.findOneBy
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 5, mobile: '09120000005' });
+      userRepository.create.mockImplementation((data) => data);
+      userRepository.save.mockResolvedValue({
+        id: 5,
+        role: userRoleEnum.AdminUser,
+      });
+
+      await service.create(
+        {
+          mobile: '09120000005',
+          password: 'Password123',
+          display_name: 'New Admin',
+          role: userRoleEnum.AdminUser,
+        },
+        { userId: 1, label: '09120000001' },
+      );
+
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'user.created',
+          entityId: 5,
+          actor: { userId: 1, label: '09120000001' },
+          changes: { role: userRoleEnum.AdminUser },
+        }),
+      );
+    });
+
     it('rejects a mobile number that is already registered', async () => {
       userRepository.findOneBy.mockResolvedValue({ id: 1 });
 
@@ -145,7 +178,10 @@ describe('UsersService', () => {
           display_name: 'Test User',
           role: userRoleEnum.NormalUser,
         }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({
+        status: 409,
+        code: 'MOBILE_ALREADY_REGISTERED',
+      });
     });
 
     it('never returns the password hash, even though save() would include it', async () => {
@@ -221,6 +257,29 @@ describe('UsersService', () => {
   });
 
   describe('updateRole', () => {
+    it('will not let an admin change their own role', async () => {
+      await expect(
+        service.updateRole(5, userRoleEnum.NormalUser, {
+          userId: 5,
+          label: null,
+        }),
+      ).rejects.toMatchObject({ code: ErrorCodes.CANNOT_CHANGE_OWN_ROLE });
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps the last admin an admin', async () => {
+      userRepository.findOne.mockResolvedValue({ id: 6, role: 'admin' });
+      userRepository.count.mockResolvedValue(1);
+
+      await expect(
+        service.updateRole(6, userRoleEnum.NormalUser, {
+          userId: 5,
+          label: null,
+        }),
+      ).rejects.toMatchObject({ code: ErrorCodes.LAST_ADMIN });
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
     it("revokes the user's sessions so a demotion takes effect", async () => {
       userRepository.update.mockResolvedValue({ affected: 1 });
       userRepository.findOneBy.mockResolvedValue({ id: 5, role: 'user' });
@@ -308,9 +367,41 @@ describe('UsersService', () => {
     it('never reserves stock, but refuses more than is in stock', async () => {
       basketQb.getOne.mockResolvedValue({ id: 11, quantity: 5 });
 
-      await expect(service.addProductToBasket(7, 3)).rejects.toThrow(
-        BadRequestException,
+      await expect(service.addProductToBasket(7, 3)).rejects.toMatchObject({
+        status: 400,
+        code: ErrorCodes.INSUFFICIENT_STOCK,
+        details: { available: 5, requested: 6 },
+      });
+      expect(basketLines.update).not.toHaveBeenCalled();
+    });
+
+    // One request for several units instead of one request per unit.
+    it('adds several units at once', async () => {
+      basketQb.getOne.mockResolvedValue({ id: 11, quantity: 1 });
+
+      await service.addProductToBasket(7, 3, undefined, 3);
+
+      expect(basketLines.update).toHaveBeenCalledWith(
+        { id: 11 },
+        { quantity: 4 },
       );
+    });
+
+    it('refuses the whole batch rather than adding part of it', async () => {
+      basketQb.getOne.mockResolvedValue({ id: 11, quantity: 3 });
+
+      await expect(
+        service.addProductToBasket(7, 3, undefined, 3),
+      ).rejects.toMatchObject({ code: ErrorCodes.INSUFFICIENT_STOCK });
+      expect(basketLines.update).not.toHaveBeenCalled();
+    });
+
+    it('removes a whole line in one request', async () => {
+      basketQb.getMany.mockResolvedValueOnce([{ id: 11, quantity: 4 }]);
+
+      await service.removeProductFromBasket(7, 3, undefined, 4);
+
+      expect(basketLines.delete).toHaveBeenCalledWith({ id: 11 });
       expect(basketLines.update).not.toHaveBeenCalled();
     });
 

@@ -7,6 +7,7 @@ import { translateError } from '../../lib/errorMessages';
 import { useFieldErrors } from '../../lib/useFieldErrors';
 import { Button, Field } from '../../components/ui/Primitives';
 import { TICKET_SUBJECTS } from './orderStatus';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 export default function NewTicket() {
   const toast = useToast();
@@ -17,6 +18,7 @@ export default function NewTicket() {
   // Opening a ticket twice is exactly what the API's cooldown is there to
   // stop, so a double click should not get as far as asking it.
   const busyRef = useRef(false);
+  usePageTitle('ثبت تیکت جدید');
 
   // Other pages link here with the form already filled in - the order page
   // sends ?subject=order&title=… so the customer only has to describe it.

@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { Button, Field } from '../components/ui/Primitives';
+import { usePageTitle } from '../lib/usePageTitle';
 
 // Where to go after signing in, from ?next=. Only a path on this site:
 // "//evil.com" and "/\evil.com" both start with a slash, and browsers
@@ -16,13 +17,20 @@ function safeNext(value) {
 }
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, ready, isAuthenticated } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [form, setForm] = useState({ mobile: '', password: '' });
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  usePageTitle('ورود');
+
+  // Already signed in (a bookmarked login link, the back button after
+  // signing in): go where the form would have sent them.
+  if (ready && isAuthenticated && !loading) {
+    return <Navigate to={safeNext(params.get('next'))} replace />;
+  }
 
   const submit = async (event) => {
     event.preventDefault();

@@ -5,6 +5,8 @@ import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { Button, Field } from '../components/ui/Primitives';
 import { RESEND_SECONDS, cooldownFrom, useCountdown } from '../lib/useCountdown';
+import { digitsOnly } from '../lib/format';
+import { usePageTitle } from '../lib/usePageTitle';
 
 export default function ForgotPassword() {
   const { forgotPassword, resetPassword } = useAuth();
@@ -17,6 +19,7 @@ export default function ForgotPassword() {
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [resendIn, setResendIn] = useCountdown();
+  usePageTitle('بازیابی رمز عبور');
 
   const request = async (event) => {
     event.preventDefault();
@@ -104,13 +107,14 @@ export default function ForgotPassword() {
               <input
                 className="input"
                 inputMode="numeric"
+                autoComplete="one-time-code"
                 maxLength={6}
                 style={{ textAlign: 'center', fontSize: 20, letterSpacing: 6 }}
                 value={form.code}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
-                    code: event.target.value.replace(/\D/g, ''),
+                    code: digitsOnly(event.target.value).slice(0, 6),
                   }))
                 }
                 required

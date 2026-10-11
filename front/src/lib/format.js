@@ -6,6 +6,31 @@ export function toPersianDigits(value) {
   return String(value ?? '').replace(/\d/g, (digit) => PERSIAN_DIGITS[Number(digit)]);
 }
 
+// The other way round, for what the customer types. A Persian keyboard -
+// the default on most Iranian phones, and on an iPhone even the number pad
+// - gives ۰-۹ (or Arabic ٠-٩), and a plain /\D/ filter threw every one of
+// them away: the code field stayed empty however many digits were typed.
+export function toAsciiDigits(value) {
+  return String(value ?? '').replace(/[۰-۹٠-٩]/g, (digit) =>
+    String(digit.charCodeAt(0) & 0xf),
+  );
+}
+
+export function digitsOnly(value) {
+  return toAsciiDigits(value).replace(/\D/g, '');
+}
+
+// The return badge, in the number of days the API actually allows. It was
+// written into the pages as "۷ روز" while RETURN_WINDOW_DAYS decided what
+// was accepted. null when the shop takes no returns - then there is no
+// badge to show at all. "Window", not "guarantee": a return is asked for,
+// checked, and can be turned down (see /return-policy).
+export function returnWindowLabel(days) {
+  if (days === 0) return null;
+  if (days === null || days === undefined) return 'امکان مرجوعی';
+  return `${toPersianDigits(days)} روز مهلت مرجوعی`;
+}
+
 export function formatToman(amount, { withUnit = true } = {}) {
   const number = Number(amount ?? 0);
   const grouped = toPersianDigits(number.toLocaleString('en-US'));

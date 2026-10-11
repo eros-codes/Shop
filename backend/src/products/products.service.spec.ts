@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, In, IsNull, QueryFailedError } from 'typeorm';
+import { Brackets, DataSource, In, IsNull, QueryFailedError } from 'typeorm';
 import {
   BadRequestException,
   ConflictException,
@@ -218,17 +218,54 @@ describe('ProductsService', () => {
       expect(qb.getManyAndCount).not.toHaveBeenCalled();
     });
 
+    // The search conditions sit inside Brackets (so a SKU match can be OR-ed
+    // in); this opens them up into a flat list of [condition, params].
+    const searchConditions = () => {
+      const seen: unknown[][] = [];
+      const recorder: Record<string, (...args: unknown[]) => unknown> = {};
+      const record = (...args: unknown[]) => {
+        if (args[0] instanceof Brackets) {
+          (args[0] as any).whereFactory(recorder);
+        } else {
+          seen.push(args);
+        }
+        return recorder;
+      };
+      recorder.where = record;
+      recorder.andWhere = record;
+      recorder.orWhere = record;
+      qb.andWhere.mock.calls.forEach((call: unknown[]) => record(...call));
+      return seen;
+    };
+
     it('uses the fulltext index for long words and LIKE only for short ones', async () => {
       await service.findAll({ search: 'iPhone 13', page: 1, limit: 10 });
 
-      expect(qb.andWhere).toHaveBeenCalledWith(
+      const conditions = searchConditions();
+      expect(conditions).toContainEqual([
         'MATCH(product.title) AGAINST (:fullTextQuery IN BOOLEAN MODE)',
         { fullTextQuery: '+iphone*' },
-      );
-      expect(qb.andWhere).toHaveBeenCalledWith(
+      ]);
+      expect(conditions).toContainEqual([
         'product.title LIKE :titlePattern0',
         { titlePattern0: '%13%' },
+      ]);
+      // The storefront searches titles only.
+      expect(conditions.some(([sql]) => String(sql).includes('sku'))).toBe(
+        false,
       );
+    });
+
+    it('lets staff find a product by an option SKU as well', async () => {
+      await service.findAll(
+        { search: 'iphone-15-black', page: 1, limit: 10 },
+        { includeDrafts: true },
+      );
+
+      expect(searchConditions()).toContainEqual([
+        expect.stringContaining('sv.sku LIKE :skuPattern'),
+        { skuPattern: '%iphone-15-black%' },
+      ]);
     });
 
     it('selects a cover image instead of every image', async () => {
@@ -395,6 +432,44 @@ describe('ProductsService', () => {
         NotFoundException,
       );
       expect(fileStorage.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('makeCoverImage', () => {
+    it('moves the picture to the front without two ever sharing a place', async () => {
+      manager.findOne
+        .mockResolvedValueOnce({ id: 1 })
+        .mockResolvedValueOnce({ id: 9, order: 2 });
+
+      await service.makeCoverImage(1, 9);
+
+      expect(manager.update).toHaveBeenNthCalledWith(
+        1,
+        ProductImage,
+        { id: 9 },
+        { order: -1 },
+      );
+      expect(qb.where).toHaveBeenCalledWith(
+        'productId = :productId AND `order` >= 0 AND `order` < :from',
+        { productId: 1, from: 2 },
+      );
+      expect(qb.orderBy).toHaveBeenCalledWith('`order`', 'DESC');
+      expect(manager.update).toHaveBeenLastCalledWith(
+        ProductImage,
+        { id: 9 },
+        { order: 0 },
+      );
+      expect(catalogCache.invalidate).toHaveBeenCalled();
+    });
+
+    it('leaves the order alone when it already is the cover', async () => {
+      manager.findOne
+        .mockResolvedValueOnce({ id: 1 })
+        .mockResolvedValueOnce({ id: 9, order: 0 });
+
+      await service.makeCoverImage(1, 9);
+
+      expect(manager.update).not.toHaveBeenCalled();
     });
   });
 

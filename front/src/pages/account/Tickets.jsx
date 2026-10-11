@@ -5,6 +5,7 @@ import { api, buildQuery } from '../../lib/api';
 import { formatDate } from '../../lib/format';
 import { ConnectionError, EmptyState, Pagination } from '../../components/ui/Primitives';
 import { TICKET_STATUS, ticketSubject } from './orderStatus';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 const FILTERS = [
   { value: '', label: 'همه' },
@@ -16,6 +17,7 @@ export default function Tickets() {
   const [result, setResult] = useState({ items: [], totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  usePageTitle('تیکت‌های پشتیبانی');
 
   const status = params.get('status') ?? '';
   const page = Math.max(1, Number(params.get('page')) || 1);

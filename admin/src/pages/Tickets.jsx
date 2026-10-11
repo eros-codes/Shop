@@ -25,21 +25,33 @@ export default function Tickets() {
   // Tracked separately from the data so a dead connection is not rendered as
   // an inbox with nothing in it.
   const [failed, setFailed] = useState(false);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(params.get('search') ?? '');
   const [openId, setOpenId] = useState(null);
   const [removing, setRemoving] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
   const status = params.get('status') ?? '';
   const page = Math.max(1, Number(params.get('page')) || 1);
+  const query = params.get('search') ?? '';
+
+  // Searched on the server across every page; it used to narrow only the
+  // twenty tickets on screen.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (search.trim() !== query) update({ search: search.trim(), page: '' });
+    }, 350);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const load = useCallback(() => {
     setLoading(true);
     setFailed(false);
     api
-      .get(`/tickets${buildQuery({ status: status || undefined, page, limit: 20 })}`, {
-        auth: true,
-      })
+      .get(
+        `/tickets${buildQuery({ status: status || undefined, search: query || undefined, page, limit: 20 })}`,
+        { auth: true },
+      )
       .then((data) =>
         setResult({
           items: data?.items ?? [],
@@ -52,7 +64,7 @@ export default function Tickets() {
         setFailed(true);
       })
       .finally(() => setLoading(false));
-  }, [status, page]);
+  }, [status, query, page]);
 
   useEffect(load, [load]);
 
@@ -80,18 +92,7 @@ export default function Tickets() {
     }
   };
 
-  // The API has no text search for tickets, so this narrows the page on
-  // screen - the same as the orders list does.
-  const term = search.trim();
-  const rows = term
-    ? result.items.filter(
-        (ticket) =>
-          String(ticket.id).includes(term) ||
-          (ticket.title ?? '').includes(term) ||
-          (ticket.user?.mobile ?? '').includes(term) ||
-          (ticket.user?.display_name ?? '').includes(term),
-      )
-    : result.items;
+  const rows = result.items;
 
   return (
     <>

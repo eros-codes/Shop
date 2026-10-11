@@ -18,6 +18,9 @@ export function CatalogProvider({ children }) {
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
   const [attributes, setAttributes] = useState([]);
+  // The shop's stated policies, from the API that enforces them (see
+  // returnWindowLabel). null until it has answered.
+  const [shop, setShop] = useState({ returnWindowDays: null });
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -26,8 +29,12 @@ export function CatalogProvider({ children }) {
       api.get('/categories/tree'),
       api.get('/brands'),
       api.get('/attributes'),
+      api.get('/shop/info'),
     ]);
-    const [tree, brandList, attributeList] = results;
+    const [tree, brandList, attributeList, shopInfo] = results;
+    if (shopInfo.status === 'fulfilled' && shopInfo.value) {
+      setShop(shopInfo.value);
+    }
 
     if (tree.status === 'fulfilled') {
       setCategories(Array.isArray(tree.value) ? tree.value : (tree.value?.items ?? []));
@@ -68,8 +75,8 @@ export function CatalogProvider({ children }) {
   }, [categories]);
 
   const value = useMemo(
-    () => ({ categories, categoryById, brands, attributes, loading, reload: load }),
-    [categories, categoryById, brands, attributes, loading, load],
+    () => ({ categories, categoryById, brands, attributes, shop, loading, reload: load }),
+    [categories, categoryById, brands, attributes, shop, loading, load],
   );
 
   return (

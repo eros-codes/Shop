@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ImageOff, Package, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, buildQuery } from '../lib/api';
 import { useToast } from '../context/ToastContext';
@@ -7,6 +8,7 @@ import { coverImage, formatToman } from '../lib/format';
 import {
   Button,
   Confirm,
+  ConnectionError,
   EmptyState,
   Pagination,
   SearchBox,
@@ -18,14 +20,22 @@ export default function Products() {
   const toast = useToast();
   const [result, setResult] = useState({ items: [], total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [editing, setEditing] = useState(null);
+  const [params, setParams] = useSearchParams();
+  // ?edit=<id> opens that product's editor - the dashboard's low-stock list
+  // links here, straight to the variant counts.
+  const [editing, setEditing] = useState(() => {
+    const id = Number(params.get('edit'));
+    return id ? { mode: 'edit', id, tab: 'variants' } : null;
+  });
   const [removing, setRemoving] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     api
       .get(
         // Drafts too: the public listing hides them, the panel is where
@@ -45,7 +55,10 @@ export default function Products() {
           totalPages: data?.totalPages ?? 1,
         }),
       )
-      .catch(() => setResult({ items: [], total: 0, totalPages: 1 }))
+      .catch(() => {
+        setResult({ items: [], total: 0, totalPages: 1 });
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
   }, [page, search]);
 
@@ -71,7 +84,16 @@ export default function Products() {
   return (
     <>
       <div className="toolbar">
-        <SearchBox value={search} onChange={setSearch} placeholder="نام کالا…" />
+        <SearchBox
+          value={search}
+          onChange={(value) => {
+            // A new search starts on page one; it used to stay on whatever
+            // page the old list was on, often past the end of the new one.
+            setSearch(value);
+            setPage(1);
+          }}
+          placeholder="نام کالا یا کد انبار (SKU)…"
+        />
         <span className="small muted">
           {result.total.toLocaleString('fa-IR')} کالا
         </span>
@@ -87,6 +109,8 @@ export default function Products() {
       <section className="card">
         {loading ? (
           <TableSkeleton cols={6} />
+        ) : failed ? (
+          <ConnectionError onRetry={load} />
         ) : result.items.length === 0 ? (
           <EmptyState
             icon={<Package size={26} />}
@@ -194,11 +218,18 @@ export default function Products() {
 
       {editing ? (
         <ProductEditor
+          key={`${editing.mode}-${editing.id ?? 'new'}`}
           mode={editing.mode}
           productId={editing.id}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
+          initialTab={editing.tab}
+          onClose={() => {
             setEditing(null);
+            if (params.get('edit')) setParams({}, { replace: true });
+          }}
+          onSaved={(createdId) => {
+            if (params.get('edit')) setParams({}, { replace: true });
+            // A new product goes straight on to its pictures.
+            setEditing(createdId ? { mode: 'edit', id: createdId, tab: 'images' } : null);
             load();
           }}
         />

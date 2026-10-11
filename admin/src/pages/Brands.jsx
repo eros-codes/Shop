@@ -49,10 +49,13 @@ export default function Brands() {
   const save = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const description = String(form.get('description') ?? '').trim();
     const payload = {
       title: form.get('title'),
       ...(form.get('slug') ? { slug: form.get('slug') } : {}),
-      ...(form.get('description') ? { description: form.get('description') } : {}),
+      // Sent even when emptied, so clearing it on an existing brand clears
+      // it; left out, the old description stayed.
+      ...(description || editing.id ? { description } : {}),
     };
     if (busyRef.current) return;
     busyRef.current = true;

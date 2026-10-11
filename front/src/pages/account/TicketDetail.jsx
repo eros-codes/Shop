@@ -8,6 +8,7 @@ import { useFieldErrors } from '../../lib/useFieldErrors';
 import { formatDateTime, toPersianDigits } from '../../lib/format';
 import { Button, ConnectionError, EmptyState, Field } from '../../components/ui/Primitives';
 import { TICKET_STATUS, ticketSubject } from './orderStatus';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 const STATUS_NOTE = {
   open: 'پیام شما ثبت شده و کارشناسان پشتیبانی به‌زودی پاسخ می‌دهند.',
@@ -45,6 +46,7 @@ export default function TicketDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const busyRef = useRef(false);
+  usePageTitle(ticket?.title ?? 'تیکت پشتیبانی');
 
   const load = useCallback(async () => {
     setFailed(false);

@@ -3,12 +3,14 @@ import { RotateCcw } from 'lucide-react';
 import { api, buildQuery } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
-import { formatDate, formatToman } from '../lib/format';
+import { formatDate, formatToman, toPersianDigits } from '../lib/format';
 import {
   Button,
+  ConnectionError,
   EmptyState,
   Field,
   Modal,
+  Pagination,
   TableSkeleton,
 } from '../components/Primitives';
 import { NEXT_RETURN_STATUS, RETURN_REASONS, RETURN_STATUS } from '../lib/status';
@@ -16,7 +18,11 @@ import { NEXT_RETURN_STATUS, RETURN_REASONS, RETURN_STATUS } from '../lib/status
 export default function Returns() {
   const toast = useToast();
   const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [status, setStatus] = useState('');
   const [resolving, setResolving] = useState(null);
   const [target, setTarget] = useState('');
@@ -29,16 +35,25 @@ export default function Returns() {
   // duplicate rows wherever the database has no unique constraint.
   const busyRef = useRef(false);
 
+  // Paged: the list stopped at the fifty newest requests.
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     api
-      .get(`/returns${buildQuery({ status: status || undefined, limit: 50 })}`, {
+      .get(`/returns${buildQuery({ status: status || undefined, page, limit: 20 })}`, {
         auth: true,
       })
-      .then((data) => setItems(data?.items ?? []))
-      .catch(() => setItems([]))
+      .then((data) => {
+        setItems(data?.items ?? []);
+        setTotal(data?.total ?? 0);
+        setTotalPages(data?.totalPages ?? 1);
+      })
+      .catch(() => {
+        setItems([]);
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
-  }, [status]);
+  }, [status, page]);
 
   useEffect(load, [load]);
 
@@ -76,7 +91,10 @@ export default function Returns() {
           className="select"
           style={{ width: 200 }}
           value={status}
-          onChange={(event) => setStatus(event.target.value)}
+          onChange={(event) => {
+            setStatus(event.target.value);
+            setPage(1);
+          }}
         >
           <option value="">همه وضعیت‌ها</option>
           {Object.entries(RETURN_STATUS).map(([value, meta]) => (
@@ -85,12 +103,14 @@ export default function Returns() {
             </option>
           ))}
         </select>
-        <span className="small muted">{items.length.toLocaleString('fa-IR')} درخواست</span>
+        <span className="small muted">{total.toLocaleString('fa-IR')} درخواست</span>
       </div>
 
       <section className="card">
         {loading ? (
           <TableSkeleton cols={5} />
+        ) : failed ? (
+          <ConnectionError onRetry={load} />
         ) : items.length === 0 ? (
           <EmptyState icon={<RotateCcw size={26} />} title="درخواست مرجوعی‌ای نیست" />
         ) : (
@@ -150,6 +170,9 @@ export default function Returns() {
                                 setResolving(request);
                                 setTarget(next[0]);
                                 setNote(request.admin_note ?? '');
+                                // A damaged item going back on sale is a choice
+                                // to make, not a default.
+                                setRestock(request.reason !== 'damaged');
                               }}
                             >
                               بررسی
@@ -166,6 +189,7 @@ export default function Returns() {
             </table>
           </div>
         )}
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </section>
 
       {resolving ? (
@@ -184,6 +208,26 @@ export default function Returns() {
           }
         >
           <div className="stack">
+            {/* What is coming back. The dialog used to ask for a decision
+                without saying which items, or how many. */}
+            <div className="card card-pad stack" style={{ gap: 6 }}>
+              <div className="tiny muted">کالاهای مرجوعی</div>
+              {(resolving.items ?? []).map((line) => (
+                <div className="spread small" key={line.id}>
+                  <span>
+                    {line.orderItem?.product?.title ?? 'کالا'}
+                    {line.orderItem?.variant_title ? (
+                      <span className="muted"> — {line.orderItem.variant_title}</span>
+                    ) : null}
+                  </span>
+                  <span className="strong">×{toPersianDigits(line.quantity)}</span>
+                </div>
+              ))}
+              {resolving.description ? (
+                <div className="tiny muted">توضیح مشتری: {resolving.description}</div>
+              ) : null}
+            </div>
+
             <Field label="وضعیت جدید">
               <select
                 className="select"

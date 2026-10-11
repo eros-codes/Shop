@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ImageOff, Minus, Plus, ShoppingBag, Trash2 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
@@ -6,12 +6,21 @@ import { useAuth } from '../context/AuthContext';
 import { Breadcrumb, Button, EmptyState } from '../components/ui/Primitives';
 import { formatToman } from '../lib/format';
 import { useInView } from '../lib/useInView';
+import { usePageTitle } from '../lib/usePageTitle';
 
 export default function Cart() {
-  const { lines, goodsTotal, increase, decrease, remove, count, settled } = useCart();
+  const { lines, goodsTotal, increase, decrease, remove, count, settled, refreshGuest } =
+    useCart();
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const ctaRef = useRef(null);
+  usePageTitle('سبد خرید');
+
+  // A guest's prices are a copy from when each line went in; opening the
+  // basket is when they matter, so they are read again.
+  useEffect(() => {
+    if (settled && !isAuthenticated) void refreshGuest();
+  }, [settled, isAuthenticated, refreshGuest]);
   const ctaVisible = useInView(ctaRef, [lines.length > 0]);
   const proceed = () => navigate(isAuthenticated ? '/checkout' : '/login?next=/checkout');
   const proceedLabel = isAuthenticated ? 'ادامه و تکمیل خرید' : 'ورود و تکمیل خرید';

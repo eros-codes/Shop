@@ -3,10 +3,12 @@ import { MapPin, Pencil, Plus, Trash2, Truck } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
-import { formatToman } from '../lib/format';
+import { formatToman, numberOrNull, toPersianDigits } from '../lib/format';
+import { PROVINCES } from '../lib/provinces';
 import {
   Button,
   Confirm,
+  ConnectionError,
   EmptyState,
   Field,
   Modal,
@@ -18,6 +20,7 @@ export default function Shipping() {
   const [methods, setMethods] = useState([]);
   const [zones, setZones] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [methodForm, setMethodForm] = useState(null);
   const [zoneForm, setZoneForm] = useState(null);
   const [rateForm, setRateForm] = useState(null);
@@ -31,13 +34,22 @@ export default function Shipping() {
 
   const load = useCallback(() => {
     setLoading(true);
+    setFailed(false);
     Promise.allSettled([api.get('/shipping/methods'), api.get('/shipping/zones')])
       .then(([methodsResult, zonesResult]) => {
         if (methodsResult.status === 'fulfilled') setMethods(methodsResult.value ?? []);
         if (zonesResult.status === 'fulfilled') setZones(zonesResult.value ?? []);
+        setFailed(methodsResult.status === 'rejected' && zonesResult.status === 'rejected');
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // Which zone each province is in already, to say so in the picker - a
+  // province in two zones is priced by whichever comes first.
+  const zoneOfProvince = new Map();
+  zones.forEach((zone) =>
+    (zone.provinces ?? []).forEach((province) => zoneOfProvince.set(province, zone)),
+  );
 
   useEffect(load, [load]);
 
@@ -47,8 +59,8 @@ export default function Shipping() {
     const payload = {
       title: form.get('title'),
       ...(form.get('code') ? { code: form.get('code') } : {}),
-      estimated_days_min: Number(form.get('estimated_days_min')),
-      estimated_days_max: Number(form.get('estimated_days_max')),
+      estimated_days_min: numberOrNull(form.get('estimated_days_min')) ?? 0,
+      estimated_days_max: numberOrNull(form.get('estimated_days_max')) ?? 0,
       supports_cash_on_delivery: form.get('cod') === 'on',
       is_active: form.get('is_active') === 'on',
     };
@@ -75,12 +87,14 @@ export default function Shipping() {
   const saveZone = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    // Picked from the same list the storefront's address form offers. The
+    // box used to be free text split on "," - and the form filled it back
+    // in joined with "، ". Saving a zone without touching it turned
+    // "تهران، البرز" into one province by that name, which no address
+    // matches, and the zone's orders fell through to the default price.
     const payload = {
       title: form.get('title'),
-      provinces: String(form.get('provinces') ?? '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
+      provinces: form.getAll('provinces').map(String),
       is_default: form.get('is_default') === 'on',
     };
     if (busyRef.current) return;
@@ -108,12 +122,12 @@ export default function Shipping() {
     const form = new FormData(event.currentTarget);
     const payload = {
       zoneId: Number(form.get('zoneId')),
-      base_cost: Number(form.get('base_cost')),
-      per_kg_cost: Number(form.get('per_kg_cost') || 0),
-      ...(form.get('free_shipping_threshold')
-        ? { free_shipping_threshold: Number(form.get('free_shipping_threshold')) }
-        : {}),
-      cash_on_delivery_fee: Number(form.get('cash_on_delivery_fee') || 0),
+      base_cost: numberOrNull(form.get('base_cost')) ?? 0,
+      per_kg_cost: numberOrNull(form.get('per_kg_cost')) ?? 0,
+      // null, not left out: emptying the box on an existing rate has to
+      // turn free shipping off, and leaving it out kept the old threshold.
+      free_shipping_threshold: numberOrNull(form.get('free_shipping_threshold')),
+      cash_on_delivery_fee: numberOrNull(form.get('cash_on_delivery_fee')) ?? 0,
     };
     if (busyRef.current) return;
     busyRef.current = true;
@@ -148,6 +162,14 @@ export default function Shipping() {
     return (
       <section className="card">
         <TableSkeleton cols={4} />
+      </section>
+    );
+  }
+
+  if (failed) {
+    return (
+      <section className="card">
+        <ConnectionError onRetry={load} />
       </section>
     );
   }
@@ -260,8 +282,8 @@ export default function Shipping() {
                       ) : null}
                     </div>
                     <div className="tiny muted">
-                      {method.code} — تحویل {method.estimated_days_min} تا{' '}
-                      {method.estimated_days_max} روز کاری
+                      {method.code} — تحویل {toPersianDigits(method.estimated_days_min)} تا{' '}
+                      {toPersianDigits(method.estimated_days_max)} روز کاری
                     </div>
                   </div>
 
@@ -320,6 +342,13 @@ export default function Shipping() {
                             </td>
                             <td>
                               <div className="cell-actions">
+                                <button
+                                  className="icon-btn"
+                                  title="ویرایش نرخ"
+                                  onClick={() => setRateForm({ method, rate })}
+                                >
+                                  <Pencil size={14} />
+                                </button>
                                 <button
                                   className="icon-btn danger"
                                   onClick={() =>
@@ -414,17 +443,43 @@ export default function Shipping() {
             <Field label="عنوان">
               <input className="input" name="title" defaultValue={zoneForm.title} required />
             </Field>
-            <Field
-              label="استان‌ها"
-              hint="با ویرگول جدا کنید؛ دقیقاً همان‌طور که در آدرس‌ها نوشته می‌شود"
-            >
-              <input
-                className="input"
-                name="provinces"
-                defaultValue={(zoneForm.provinces ?? []).join('، ')}
-                placeholder="تهران، البرز"
-              />
-            </Field>
+            <div className="field">
+              <span className="field-label">استان‌ها</span>
+              <div className="province-grid">
+                {[
+                  ...PROVINCES,
+                  // A name typed in before this list existed is kept, and
+                  // shown, rather than silently dropped on save.
+                  ...(zoneForm.provinces ?? []).filter((name) => !PROVINCES.includes(name)),
+                ].map((province) => {
+                  const other = zoneOfProvince.get(province);
+                  const elsewhere = other && other.id !== zoneForm.id ? other.title : null;
+                  return (
+                    <label className="checkbox" key={province}>
+                      <input
+                        type="checkbox"
+                        name="provinces"
+                        value={province}
+                        defaultChecked={(zoneForm.provinces ?? []).includes(province)}
+                      />
+                      <span>
+                        {province}
+                        {!PROVINCES.includes(province) ? (
+                          <span className="tiny" style={{ color: 'var(--danger-600)' }}>
+                            {' '}(خارج از فهرست استان‌ها)
+                          </span>
+                        ) : elsewhere ? (
+                          <span className="tiny muted"> ({elsewhere})</span>
+                        ) : null}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <span className="field-hint">
+                هزینه‌ی ارسال هر آدرس از منطقه‌ای خوانده می‌شود که استانش در آن است.
+              </span>
+            </div>
             <label className="checkbox">
               <input
                 type="checkbox"
@@ -447,7 +502,12 @@ export default function Shipping() {
         >
           <form onSubmit={saveRate} className="stack">
             <Field label="منطقه">
-              <select className="select" name="zoneId" required>
+              <select
+                className="select"
+                name="zoneId"
+                defaultValue={rateForm.rate?.zone?.id ?? zones[0]?.id}
+                required
+              >
                 {zones.map((zone) => (
                   <option key={zone.id} value={zone.id}>
                     {zone.title}
@@ -457,10 +517,21 @@ export default function Shipping() {
             </Field>
             <div className="grid cols-2">
               <Field label="هزینه پایه (تومان)" hint="شامل کیلوی اول">
-                <input className="input" name="base_cost" inputMode="numeric" required />
+                <input
+                  className="input"
+                  name="base_cost"
+                  inputMode="numeric"
+                  defaultValue={rateForm.rate?.base_cost ?? ''}
+                  required
+                />
               </Field>
               <Field label="هزینه هر کیلوی اضافه">
-                <input className="input" name="per_kg_cost" inputMode="numeric" />
+                <input
+                  className="input"
+                  name="per_kg_cost"
+                  inputMode="numeric"
+                  defaultValue={rateForm.rate?.per_kg_cost ?? ''}
+                />
               </Field>
             </div>
             <div className="grid cols-2">
@@ -469,6 +540,7 @@ export default function Shipping() {
                   className="input"
                   name="free_shipping_threshold"
                   inputMode="numeric"
+                  defaultValue={rateForm.rate?.free_shipping_threshold ?? ''}
                 />
               </Field>
               <Field label="کارمزد پرداخت در محل">
@@ -476,6 +548,7 @@ export default function Shipping() {
                   className="input"
                   name="cash_on_delivery_fee"
                   inputMode="numeric"
+                  defaultValue={rateForm.rate?.cash_on_delivery_fee ?? ''}
                 />
               </Field>
             </div>

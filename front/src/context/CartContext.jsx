@@ -52,6 +52,8 @@ export function CartProvider({ children }) {
   // took that for an empty cart and sent the customer away.
   const [settled, setSettled] = useState(false);
   const mergedFor = useRef(null);
+  const signedInRef = useRef(isAuthenticated);
+  signedInRef.current = isAuthenticated;
 
   const loadServerCart = useCallback(async () => {
     if (!user?.id) return;
@@ -79,6 +81,63 @@ export function CartProvider({ children }) {
     }
   }, [user?.id, toast]);
 
+  // A guest's basket is a copy kept in this browser, with the price and
+  // stock it had when each line went in - a basket filled last week still
+  // showed last week's prices until checkout asked the customer to sign
+  // in. Read every product again and bring the lines up to date; one that
+  // has since been removed or switched off is taken out, and the customer
+  // is told.
+  const refreshGuest = useCallback(async () => {
+    const productIds = [...new Set(readGuestCart().map((line) => line.productId))];
+    if (productIds.length === 0) return;
+
+    const fetched = await Promise.all(
+      productIds.map((id) =>
+        api
+          .get(`/products/${id}`)
+          .then((product) => [id, product])
+          .catch((error) => [id, error?.status === 404 ? null : undefined]),
+      ),
+    );
+    const products = new Map(fetched);
+
+    // Applied to the basket as it is now, not as it was when the requests
+    // went out: a line added meanwhile must not be lost.
+    let dropped = 0;
+    const next = readGuestCart().flatMap((line) => {
+      const product = products.get(line.productId);
+      if (product === undefined) return [line]; // not asked, or no answer
+      const variant = line.variantId
+        ? (product?.variants ?? []).find((item) => item.id === line.variantId)
+        : null;
+      if (!product || (line.variantId && (!variant || variant.is_active === false))) {
+        dropped += 1;
+        return [];
+      }
+      return [
+        {
+          ...line,
+          title: product.title,
+          slug: product.slug,
+          variantTitle: variant?.title ?? line.variantTitle,
+          image: coverImage(product) ?? line.image,
+          unitPrice: effectivePrice(product, variant),
+          stock: Number(variant?.stock ?? product.stock ?? 0),
+        },
+      ];
+    });
+    // Signed in while the products were loading: the basket on screen is
+    // the account's now, and the merge has taken care of these lines.
+    if (signedInRef.current) return;
+    setLines(next);
+    writeGuestCart(next);
+    if (dropped > 0) {
+      toast.error(
+        `${dropped.toLocaleString('fa-IR')} کالا دیگر فروخته نمی‌شود و از سبد خرید برداشته شد`,
+      );
+    }
+  }, [toast]);
+
   // Signing in: whatever the visitor collected is sent once, then the
   // basket is read back from the server, which is the only copy from
   // then on.
@@ -89,6 +148,7 @@ export function CartProvider({ children }) {
       mergedFor.current = null;
       setLines(readGuestCart());
       setSettled(true);
+      void refreshGuest();
       return;
     }
     if (mergedFor.current === user?.id) return;
@@ -121,7 +181,7 @@ export function CartProvider({ children }) {
       await loadServerCart();
       setSettled(true);
     })();
-  }, [ready, isAuthenticated, user?.id, loadServerCart, toast]);
+  }, [ready, isAuthenticated, user?.id, loadServerCart, refreshGuest, toast]);
 
   const persistGuest = useCallback((next) => {
     setLines(next);
@@ -174,20 +234,25 @@ export function CartProvider({ children }) {
       }
 
       try {
-        // The API adds one unit per call, which is also what the
-        // quantity stepper does.
-        for (let i = 0; i < quantity; i += 1) {
-          await api.post(
-            '/products/basket',
-            { product_id: product.id, variant_id: variantId ?? undefined },
-            { auth: true },
-          );
-        }
+        // All the units in one request: the API takes them or refuses
+        // them together, so a failure no longer leaves part of them in.
+        await api.post(
+          '/products/basket',
+          {
+            product_id: product.id,
+            variant_id: variantId ?? undefined,
+            ...(quantity > 1 ? { quantity } : {}),
+          },
+          { auth: true },
+        );
         await loadServerCart();
         toast.success('به سبد خرید اضافه شد');
         return true;
       } catch (error) {
         toast.error(translateError(error));
+        // Someone else may have bought the last ones meanwhile: show the
+        // basket as it really is.
+        void loadServerCart();
         return false;
       }
     },
@@ -254,19 +319,20 @@ export function CartProvider({ children }) {
         return;
       }
       try {
-        for (let i = 0; i < line.quantity; i += 1) {
-          await api.delete(
-            '/products/basket',
-            {
-              product_id: line.productId,
-              variant_id: line.variantId ?? undefined,
-            },
-            { auth: true },
-          );
-        }
+        // The whole line in one request (it used to be one per unit).
+        await api.delete(
+          '/products/basket',
+          {
+            product_id: line.productId,
+            variant_id: line.variantId ?? undefined,
+            quantity: line.quantity,
+          },
+          { auth: true },
+        );
         await loadServerCart();
       } catch (error) {
         toast.error(translateError(error));
+        void loadServerCart();
       }
     },
     [isAuthenticated, loadServerCart, persistGuest, toast],
@@ -298,9 +364,10 @@ export function CartProvider({ children }) {
       decrease,
       remove,
       reload: loadServerCart,
+      refreshGuest,
       clearLocal,
     }),
-    [lines, loading, settled, totals, add, increase, decrease, remove, loadServerCart, clearLocal],
+    [lines, loading, settled, totals, add, increase, decrease, remove, loadServerCart, refreshGuest, clearLocal],
   );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

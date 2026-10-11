@@ -1,22 +1,35 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Package } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatDate, formatToman } from '../../lib/format';
-import { EmptyState } from '../../components/ui/Primitives';
+import { EmptyState, Pagination } from '../../components/ui/Primitives';
 import { ORDER_STATUS } from './orderStatus';
+import { usePageTitle } from '../../lib/usePageTitle';
+
+const PAGE_SIZE = 20;
 
 export default function Orders() {
+  const [params, setParams] = useSearchParams();
+  const page = Math.max(1, Number(params.get('page')) || 1);
   const [orders, setOrders] = useState([]);
+  // The list stopped at the fifty most recent, with nothing to say there
+  // were more.
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  usePageTitle('سفارش‌های من');
 
   useEffect(() => {
+    setLoading(true);
     api
-      .get('/orders?limit=50', { auth: true })
-      .then((data) => setOrders(data?.items ?? []))
+      .get(`/orders?limit=${PAGE_SIZE}&page=${page}`, { auth: true })
+      .then((data) => {
+        setOrders(data?.items ?? []);
+        setTotalPages(data?.totalPages ?? 1);
+      })
       .catch(() => setOrders([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   if (loading) {
     return <div className="skeleton" style={{ height: 240, borderRadius: 16 }} />;
@@ -69,6 +82,14 @@ export default function Orders() {
           </Link>
         );
       })}
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        onChange={(next) => {
+          setParams(next > 1 ? { page: String(next) } : {});
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import {
   ChevronDown,
   Heart,
@@ -14,6 +14,7 @@ import { Drawer } from '../ui/Primitives';
 import { useCart } from '../../context/CartContext';
 import { useCatalog } from '../../context/CatalogContext';
 import { useWishlist } from '../../context/WishlistContext';
+import { toPersianDigits } from '../../lib/format';
 
 const QUICK_LINKS = [
   { label: 'پیشنهاد ویژه', to: '/products?onSale=true' },
@@ -28,12 +29,21 @@ export default function Header() {
   const { count } = useCart();
   const { count: wishCount } = useWishlist();
   const { isAuthenticated, user } = useAuth();
+  const [searchParams] = useSearchParams();
   const [term, setTerm] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     setMenuOpen(false);
   }, [location.pathname, location.search]);
+
+  // The box shows what the listing is actually searching for: after a
+  // reload it was empty, and after "clear filters" it still held the old
+  // words.
+  const activeSearch = location.pathname === '/products' ? (searchParams.get('search') ?? '') : '';
+  useEffect(() => {
+    setTerm(activeSearch);
+  }, [activeSearch]);
 
   const submit = (event) => {
     event.preventDefault();
@@ -80,15 +90,18 @@ export default function Header() {
             <span>{isAuthenticated ? (user?.display_name ?? 'حساب من') : 'ورود / ثبت‌نام'}</span>
           </Link>
 
-          <Link className="header-action" to="/account/favorites">
+          <Link
+            className="header-action"
+            to={isAuthenticated ? '/account/favorites' : '/favorites'}
+          >
             <Heart size={20} />
-            {wishCount > 0 ? <span className="count">{wishCount}</span> : null}
+            {wishCount > 0 ? <span className="count">{toPersianDigits(wishCount)}</span> : null}
             <span>علاقه‌مندی‌ها</span>
           </Link>
 
           <Link className="header-action" to="/cart">
             <ShoppingCart size={20} />
-            {count > 0 ? <span className="count">{count}</span> : null}
+            {count > 0 ? <span className="count">{toPersianDigits(count)}</span> : null}
             <span>سبد خرید</span>
           </Link>
         </div>

@@ -5,6 +5,7 @@ import { useToast } from '../../context/ToastContext';
 import { translateError } from '../../lib/errorMessages';
 import { Button, Field } from '../../components/ui/Primitives';
 import { useFieldErrors } from '../../lib/useFieldErrors';
+import { usePageTitle } from '../../lib/usePageTitle';
 
 export default function ChangePassword() {
   const { changePassword, logout } = useAuth();
@@ -14,6 +15,7 @@ export default function ChangePassword() {
   const [form, setForm] = useState({ currentPassword: '', newPassword: '' });
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  usePageTitle('تغییر رمز عبور');
 
   const submit = async (event) => {
     event.preventDefault();

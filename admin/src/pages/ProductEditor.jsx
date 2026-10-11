@@ -3,8 +3,8 @@ import { ImageOff, Plus, Trash2, Upload } from 'lucide-react';
 import { api, request } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
-import { imageUrl } from '../lib/format';
-import { Button, Field, Modal } from '../components/Primitives';
+import { digitsOnly, imageUrl } from '../lib/format';
+import { Button, Confirm, Field, Modal } from '../components/Primitives';
 import { useFieldErrors } from '../lib/useFieldErrors';
 
 const EMPTY = {
@@ -27,10 +27,25 @@ const emptyVariant = () => ({
   sku: '',
   stock: 0,
   price: '',
+  sale_price: '',
+  is_active: true,
   attributes: {},
 });
 
-export default function ProductEditor({ mode, productId, onClose, onSaved }) {
+// What a saved variant looked like, to compare the form against later.
+const snapshotOf = (payload) => ({
+  title: payload.title ?? '',
+  sku: payload.sku ?? '',
+  stock: payload.stock,
+  price: payload.price ?? '',
+  sale_price: payload.sale_price ?? '',
+  is_active: payload.is_active !== false,
+  attributes: JSON.stringify(
+    payload.attributes.map((a) => [a.attributeId, a.optionId]).sort((a, b) => a[0] - b[0]),
+  ),
+});
+
+export default function ProductEditor({ mode, productId, initialTab, onClose, onSaved }) {
   const toast = useToast();
   const fieldErrors = useFieldErrors();
   const isEdit = mode === 'edit';
@@ -49,7 +64,10 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
   // matters because a repeated submit fires side effects again and can leave
   // duplicate rows wherever the database has no unique constraint.
   const busyRef = useRef(false);
-  const [tab, setTab] = useState('general');
+  const [tab, setTab] = useState(initialTab ?? 'general');
+  const [uploading, setUploading] = useState(false);
+  const [removingVariant, setRemovingVariant] = useState(null);
+  const [priceError, setPriceError] = useState(null);
 
   useEffect(() => {
     Promise.allSettled([
@@ -97,6 +115,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
               sku: variant.sku ?? '',
               stock: Number(variant.stock) || 0,
               price: variant.price ?? '',
+              sale_price: variant.sale_price ?? '',
+              is_active: variant.is_active !== false,
               attributes: JSON.stringify(
                 (variant.attributeValues ?? [])
                   .map((value) => [value.attribute.id, value.option.id])
@@ -113,6 +133,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
             sku: variant.sku,
             stock: variant.stock,
             price: variant.price ?? '',
+            sale_price: variant.sale_price ?? '',
+            is_active: variant.is_active !== false,
             attributes: Object.fromEntries(
               (variant.attributeValues ?? []).map((value) => [
                 value.attribute.id,
@@ -159,6 +181,8 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
     ...(variant.sku.trim() ? { sku: variant.sku.trim() } : {}),
     stock: Number(variant.stock) || 0,
     ...(variant.price !== '' ? { price: Number(variant.price) } : {}),
+    ...(variant.sale_price !== '' ? { sale_price: Number(variant.sale_price) } : {}),
+    is_active: variant.is_active !== false,
     attributes: Object.entries(variant.attributes)
       .filter(([, optionId]) => !!optionId)
       .map(([attributeId, optionId]) => ({
@@ -176,9 +200,15 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
     const out = {};
     if ((payload.title ?? '') !== before.title) out.title = payload.title;
     if ((payload.sku ?? '') !== before.sku) out.sku = payload.sku;
+    // An emptied price or sale price goes out as null so it is actually
+    // cleared; left out, the old one stayed whatever the form showed.
     if (String(payload.price ?? '') !== String(before.price ?? '')) {
-      if (payload.price !== undefined) out.price = payload.price;
+      out.price = payload.price ?? null;
     }
+    if (String(payload.sale_price ?? '') !== String(before.sale_price ?? '')) {
+      out.sale_price = payload.sale_price ?? null;
+    }
+    if (payload.is_active !== before.is_active) out.is_active = payload.is_active;
     const attrs = JSON.stringify(
       payload.attributes
         .map((a) => [a.attributeId, a.optionId])
@@ -218,6 +248,13 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
 
   const save = async () => {
     if (busyRef.current) return;
+    // An empty price used to go out as 0 - a product published for free.
+    if (form.price === '') {
+      setPriceError('قیمت کالا را وارد کنید.');
+      setTab('general');
+      return;
+    }
+    setPriceError(null);
     busyRef.current = true;
     setSaving(true);
     let stage = 'product';
@@ -255,6 +292,12 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
 
         // Variants are their own resources: new rows are added, existing
         // ones patched. Stock stays where it belongs - on the variant.
+        //
+        // Each one that goes through is recorded as saved straight away. If
+        // a later one fails and the admin presses save again, the ones
+        // already written are not sent twice - a repeated stock change used
+        // to come back as "stock changed meanwhile", and a repeated new row
+        // was a duplicate.
         for (const variant of variants) {
           const payload = variantPayload(variant);
           if (variant.id) {
@@ -265,16 +308,28 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
               changed,
               { auth: true },
             );
+            loadedVariants.current.set(variant.id, snapshotOf(payload));
           } else {
-            await api.post(`/products/${productId}/variants`, payload, {
+            const known = new Set(variants.map((item) => item.id).filter(Boolean));
+            const product = await api.post(`/products/${productId}/variants`, payload, {
               auth: true,
             });
+            const added = (product?.variants ?? []).filter((item) => !known.has(item.id));
+            if (added.length === 1) {
+              const id = added[0].id;
+              loadedVariants.current.set(id, snapshotOf(payload));
+              setVariants((current) =>
+                current.map((item) => (item.key === variant.key ? { ...item, id } : item)),
+              );
+              variant.id = id;
+            }
           }
         }
         toast.success('کالا به‌روز شد');
+        onSaved();
       } else {
         stage = 'product';
-        await api.post(
+        const created = await api.post(
           '/products',
           {
             ...base,
@@ -283,9 +338,12 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
           },
           { auth: true },
         );
-        toast.success('کالا ساخته شد');
+        // Pictures can only go onto a product that exists, so the editor
+        // used to close here and the admin had to find the new product and
+        // open it again. It now carries on to the pictures.
+        toast.success('کالا ساخته شد؛ حالا تصاویرش را اضافه کنید');
+        onSaved(created?.id ?? null);
       }
-      onSaved();
     } catch (error) {
       // Only the product's own request maps onto these inputs. On create the
       // variants travel inside it as variants.N.*, which have no input of
@@ -303,10 +361,15 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
   };
 
   const uploadImages = async (event) => {
-    const files = [...(event.target.files ?? [])];
+    const input = event.target;
+    const files = [...(input.files ?? [])];
+    // Cleared at once, so picking the same file again (after a failed
+    // upload, say) still fires a change.
+    input.value = '';
     if (files.length === 0 || !isEdit) return;
     const body = new FormData();
     files.forEach((file) => body.append('images', file));
+    setUploading(true);
     try {
       const updated = await request(`/products/${productId}/images`, {
         method: 'POST',
@@ -315,6 +378,22 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
       });
       setImages(updated?.images ?? []);
       toast.success('تصاویر آپلود شد');
+    } catch (error) {
+      toast.error(translateError(error));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const makeCover = async (imageId) => {
+    try {
+      const updated = await api.patch(
+        `/products/${productId}/images/${imageId}/cover`,
+        {},
+        { auth: true },
+      );
+      setImages(updated?.images ?? []);
+      toast.success('تصویر اصلی تغییر کرد');
     } catch (error) {
       toast.error(translateError(error));
     }
@@ -332,8 +411,12 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
     }
   };
 
+  // A saved variant is deleted on the server at once - not on "save" like
+  // everything else in this form - so it is asked about first. One stray tap
+  // on the bin used to take a colour off sale.
   const removeVariant = async (variant) => {
     if (variant.id) {
+      setRemovingVariant(null);
       try {
         await api.delete(
           `/products/${productId}/variants/${variant.id}`,
@@ -415,25 +498,27 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
 
               <div className="grid cols-3">
                 <Field label="قیمت (تومان)"
-            error={fieldErrors.of('price')}>
+            error={priceError ?? fieldErrors.of('price')}>
                   <input
                     className="input"
                     inputMode="numeric"
                     value={form.price}
-                    onChange={(event) =>
-                      set('price', event.target.value.replace(/\D/g, ''))
-                    }
+                    onChange={(event) => {
+                      setPriceError(null);
+                      set('price', digitsOnly(event.target.value));
+                    }}
                   />
                 </Field>
-                <Field label="قیمت حراج"
-            error={fieldErrors.of('sale_price')} hint="خالی یعنی بدون حراج">
+                <Field
+                  label="قیمت حراج"
+                  error={fieldErrors.of('sale_price')}
+                  hint="خالی یعنی بدون حراج. گزینه‌ای که قیمت اختصاصی دارد، حراج خودش را لازم دارد."
+                >
                   <input
                     className="input"
                     inputMode="numeric"
                     value={form.sale_price}
-                    onChange={(event) =>
-                      set('sale_price', event.target.value.replace(/\D/g, ''))
-                    }
+                    onChange={(event) => set('sale_price', digitsOnly(event.target.value))}
                   />
                 </Field>
                 <Field label="وزن (گرم)"
@@ -442,9 +527,7 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                     className="input"
                     inputMode="numeric"
                     value={form.weight_grams}
-                    onChange={(event) =>
-                      set('weight_grams', event.target.value.replace(/\D/g, ''))
-                    }
+                    onChange={(event) => set('weight_grams', digitsOnly(event.target.value))}
                   />
                 </Field>
               </div>
@@ -514,10 +597,36 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                   <div className="spread">
                     <span className="small strong">
                       {variant.title || 'گزینه بدون عنوان'}
+                      {variant.is_active === false ? (
+                        <span className="badge badge-muted" style={{ marginInlineStart: 8 }}>
+                          غیرفعال
+                        </span>
+                      ) : null}
                     </span>
+                    {/* Off sale for now - out of production, waiting for
+                        stock - without deleting it. Deleting was the only
+                        way, and it cannot be undone. */}
+                    <label className="checkbox tiny" style={{ marginInlineStart: 'auto' }}>
+                      <input
+                        type="checkbox"
+                        checked={variant.is_active !== false}
+                        onChange={(event) =>
+                          setVariants((current) =>
+                            current.map((item) =>
+                              item.key === variant.key
+                                ? { ...item, is_active: event.target.checked }
+                                : item,
+                            ),
+                          )
+                        }
+                      />
+                      در فروش
+                    </label>
                     <button
                       className="icon-btn danger"
-                      onClick={() => removeVariant(variant)}
+                      onClick={() =>
+                        variant.id ? setRemovingVariant(variant) : removeVariant(variant)
+                      }
                       title="حذف گزینه"
                     >
                       <Trash2 size={15} />
@@ -559,7 +668,7 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                     </div>
                   ) : null}
 
-                  <div className="grid cols-4">
+                  <div className="grid cols-4 variant-fields">
                     <Field label="عنوان" hint="خالی = از ویژگی‌ها ساخته می‌شود">
                       <input
                         className="input"
@@ -599,14 +708,14 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                           setVariants((current) =>
                             current.map((item) =>
                               item.key === variant.key
-                                ? { ...item, stock: event.target.value.replace(/\D/g, '') }
+                                ? { ...item, stock: digitsOnly(event.target.value) }
                                 : item,
                             ),
                           )
                         }
                       />
                     </Field>
-                    <Field label="قیمت اختصاصی" hint="خالی = قیمت کالا">
+                    <Field label="قیمت اختصاصی" hint="خالی = قیمت و حراج کالا">
                       <input
                         className="input"
                         inputMode="numeric"
@@ -615,13 +724,35 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                           setVariants((current) =>
                             current.map((item) =>
                               item.key === variant.key
-                                ? { ...item, price: event.target.value.replace(/\D/g, '') }
+                                ? { ...item, price: digitsOnly(event.target.value) }
                                 : item,
                             ),
                           )
                         }
                       />
                     </Field>
+                    {/* With its own price, a variant ignores the product's
+                        sale price - the API prices it from these two alone.
+                        There was no field for it, so such a variant could
+                        never be put on sale. */}
+                    {variant.price !== '' ? (
+                      <Field label="حراج اختصاصی" hint="خالی = بدون حراج">
+                        <input
+                          className="input"
+                          inputMode="numeric"
+                          value={variant.sale_price}
+                          onChange={(event) =>
+                            setVariants((current) =>
+                              current.map((item) =>
+                                item.key === variant.key
+                                  ? { ...item, sale_price: digitsOnly(event.target.value) }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                      </Field>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -707,14 +838,19 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
 
           {tab === 'images' && isEdit ? (
             <div className="stack">
-              <label className="btn btn-soft" style={{ alignSelf: 'flex-start' }}>
-                <Upload size={15} />
-                آپلود تصویر
+              <label
+                className="btn btn-soft"
+                style={{ alignSelf: 'flex-start' }}
+                aria-disabled={uploading}
+              >
+                {uploading ? <span className="spinner" /> : <Upload size={15} />}
+                {uploading ? 'در حال آپلود…' : 'آپلود تصویر'}
                 <input
                   type="file"
                   accept="image/*"
                   multiple
                   hidden
+                  disabled={uploading}
                   onChange={uploadImages}
                 />
               </label>
@@ -725,13 +861,23 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
                 </p>
               ) : (
                 <div className="grid cols-4">
-                  {images.map((image) => (
+                  {images.map((image, index) => (
                     <div className="card card-pad stack" key={image.id} style={{ gap: 8 }}>
                       <img
                         src={imageUrl(image.url ?? image.path)}
                         alt=""
                         style={{ height: 110, objectFit: 'contain' }}
                       />
+                      {/* The first picture is the one every listing shows. */}
+                      {index === 0 ? (
+                        <span className="badge badge-success" style={{ alignSelf: 'center' }}>
+                          تصویر اصلی
+                        </span>
+                      ) : (
+                        <Button variant="soft" size="sm" onClick={() => makeCover(image.id)}>
+                          تصویر اصلی شود
+                        </Button>
+                      )}
                       <Button
                         variant="danger"
                         size="sm"
@@ -748,6 +894,15 @@ export default function ProductEditor({ mode, productId, onClose, onSaved }) {
           ) : null}
         </div>
       )}
+
+      {removingVariant ? (
+        <Confirm
+          title="حذف گزینه"
+          message={`گزینه‌ی «${removingVariant.title || 'بدون عنوان'}» همین حالا حذف شود؟ سفارش‌های گذشته دست‌نخورده می‌مانند.`}
+          onConfirm={() => removeVariant(removingVariant)}
+          onClose={() => setRemovingVariant(null)}
+        />
+      ) : null}
     </Modal>
   );
 }

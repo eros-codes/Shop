@@ -1,5 +1,4 @@
 import {
-  ConflictException,
   HttpStatus,
   Injectable,
   Logger,
@@ -425,7 +424,8 @@ export class AuthService {
       // The number was registered meanwhile (a second tab, an admin
       // creating the account) - that is a conflict, not a server error.
       if (isDuplicateEntryError(error)) {
-        throw new ConflictException(
+        throw AppError.conflict(
+          ErrorCodes.MOBILE_ALREADY_REGISTERED,
           'An account with this mobile number already exists - sign in instead',
         );
       }

@@ -12,7 +12,8 @@ import {
   Pagination,
   SkeletonCard,
 } from '../components/ui/Primitives';
-import { formatToman } from '../lib/format';
+import { digitsOnly, formatToman } from '../lib/format';
+import { usePageTitle } from '../lib/usePageTitle';
 
 const SORTS = [
   { value: 'best_selling', label: 'پرفروش‌ترین' },
@@ -35,10 +36,21 @@ export default function Products() {
   const [priceDraft, setPriceDraft] = useState({ min: '', max: '' });
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+  // The price boxes show the range that is actually applied - opened from
+  // a link, or after "clear all", they used to sit empty, and pressing
+  // "apply" then quietly dropped the range.
+  const minPrice = params.get('minPrice') ?? '';
+  const maxPrice = params.get('maxPrice') ?? '';
+  useEffect(() => {
+    setPriceDraft({ min: minPrice, max: maxPrice });
+  }, [minPrice, maxPrice]);
+
   const query = useMemo(() => {
     const selected = params.get('attributeOptions');
     return {
-      page: Number(params.get('page') ?? 1),
+      // A hand-edited ?page=abc asked the API for page NaN and drew the
+      // "could not reach the server" card.
+      page: Math.max(1, Number(params.get('page')) || 1),
       limit: 24,
       search: params.get('search') ?? undefined,
       categoryId: params.get('categoryId') ?? undefined,
@@ -56,6 +68,20 @@ export default function Products() {
   }, [params]);
 
   const queryString = useMemo(() => buildQuery(query), [query]);
+
+  const categoryTitle = categoryById.get(Number(params.get('categoryId')))?.title;
+  usePageTitle(
+    params.get('search')
+      ? `جستجوی «${params.get('search')}»`
+      : (categoryTitle ?? 'همه کالاها'),
+  );
+
+  // Paging changes only the query string, which the layout does not treat
+  // as a new page: the next 24 products loaded while the customer was
+  // still looking at the pagination bar at the bottom.
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [query.page]);
 
   useEffect(() => {
     let cancelled = false;
@@ -255,7 +281,7 @@ export default function Products() {
             onChange={(event) =>
               setPriceDraft((current) => ({
                 ...current,
-                min: event.target.value.replace(/\D/g, ''),
+                min: digitsOnly(event.target.value),
               }))
             }
           />
@@ -267,7 +293,7 @@ export default function Products() {
             onChange={(event) =>
               setPriceDraft((current) => ({
                 ...current,
-                max: event.target.value.replace(/\D/g, ''),
+                max: digitsOnly(event.target.value),
               }))
             }
           />

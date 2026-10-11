@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Headphones, Lock, Send } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
@@ -159,6 +160,17 @@ export default function TicketDrawer({ ticketId, onClose, onChanged }) {
               <div className="tiny muted">مشتری</div>
               <div className="small strong">{ticket.user?.display_name ?? '—'}</div>
               <div className="tiny muted">{ticket.user?.mobile}</div>
+              {/* Most tickets are about an order; this is where to look. */}
+              {ticket.user?.mobile ? (
+                <Link
+                  className="tiny"
+                  style={{ color: 'var(--brand-600)' }}
+                  to={`/orders?search=${encodeURIComponent(ticket.user.mobile)}`}
+                  onClick={onClose}
+                >
+                  سفارش‌های این مشتری
+                </Link>
+              ) : null}
             </div>
             <div>
               <div className="tiny muted">ثبت</div>

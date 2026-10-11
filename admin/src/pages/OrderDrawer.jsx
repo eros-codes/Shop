@@ -1,10 +1,18 @@
 import { useEffect, useState, useRef } from 'react';
+import { Link } from 'react-router-dom';
+import { Printer } from 'lucide-react';
 import { api } from '../lib/api';
+import { printInvoice } from '../lib/printInvoice';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
-import { formatDateTime, formatToman } from '../lib/format';
+import { formatDateTime, formatToman, toAsciiDigits } from '../lib/format';
 import { Button, Field, Modal } from '../components/Primitives';
-import { NEXT_STATUS, ORDER_STATUS, PAYMENT_METHODS } from '../lib/status';
+import {
+  ORDER_STATUS,
+  PAYMENT_METHODS,
+  nextStatuses,
+  transitionLabel,
+} from '../lib/status';
 
 export default function OrderDrawer({ orderId, onClose, onChanged }) {
   const toast = useToast();
@@ -38,26 +46,32 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
       .finally(() => setLoading(false));
   }, [orderId]);
 
+  // A shipped order's tracking code can be corrected: the API takes the
+  // current status again with the new code and changes nothing else. There
+  // used to be no way to fix a mistyped code once the order was "sent".
+  const editingTracking = order?.status === 'sent' && !target;
+
   const changeStatus = async () => {
-    if (!target || savingRef.current) return;
+    const status = target || (editingTracking ? 'sent' : '');
+    if (!status || savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
     try {
+      const code = toAsciiDigits(tracking.trim());
       const updated = await api.patch(
         `/orders/${orderId}/status`,
         {
-          status: target,
+          status,
           // Sent with the same request, so marking an order shipped and
           // recording its tracking code is one action.
-          ...(target === 'sent' && tracking.trim()
-            ? { tracking_code: tracking.trim() }
-            : {}),
+          ...(status === 'sent' && code ? { tracking_code: code } : {}),
         },
         { auth: true },
       );
       setOrder(updated);
+      setTracking(updated?.tracking_code ?? code);
       setTarget('');
-      toast.success('وضعیت سفارش به‌روز شد');
+      toast.success(target ? 'وضعیت سفارش به‌روز شد' : 'کد رهگیری به‌روز شد');
       onChanged?.();
     } catch (error) {
       toast.error(translateError(error));
@@ -68,7 +82,9 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
   };
 
   const meta = ORDER_STATUS[order?.status] ?? { label: order?.status, tone: 'muted' };
-  const nextOptions = NEXT_STATUS[order?.status] ?? [];
+  const nextOptions = order ? nextStatuses(order) : [];
+  const cod = order?.payment_method === 'cash_on_delivery';
+  const moneyIn = !cod || !!order?.payed_time;
 
   return (
     <Modal
@@ -84,9 +100,28 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
           <Button variant="ghost" onClick={onClose}>
             بستن
           </Button>
+          {/* The invoice / packing slip that goes in the parcel. */}
+          {order ? (
+            <Button
+              variant="soft"
+              onClick={() => {
+                if (!printInvoice(order)) toast.error('پنجره‌ی چاپ باز نشد؛ اجازه‌ی پاپ‌آپ را بدهید.');
+              }}
+            >
+              <Printer size={15} />
+              چاپ فاکتور
+            </Button>
+          ) : null}
           {nextOptions.length > 0 ? (
-            <Button onClick={changeStatus} loading={saving} disabled={!target}>
-              ثبت تغییر وضعیت
+            <Button
+              onClick={changeStatus}
+              loading={saving}
+              disabled={
+                !target &&
+                !(editingTracking && tracking.trim() && tracking.trim() !== (order?.tracking_code ?? ''))
+              }
+            >
+              {editingTracking ? 'ذخیره' : 'ثبت تغییر وضعیت'}
             </Button>
           ) : null}
         </>
@@ -112,6 +147,20 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
               <div className="small strong">
                 {PAYMENT_METHODS[order.payment_method] ?? '—'}
               </div>
+              {/* What support needs to match a payment with the bank or
+                  the gateway - neither was on screen. */}
+              {order.payed_time ? (
+                <div className="tiny muted">پرداخت: {formatDateTime(order.payed_time)}</div>
+              ) : cod ? (
+                <div className="tiny" style={{ color: 'var(--warning-600)' }}>
+                  وجه هنوز دریافت نشده
+                </div>
+              ) : null}
+              {order.payment_reference ? (
+                <div className="tiny muted">
+                  کد پیگیری: <bdi>{order.payment_reference}</bdi>
+                </div>
+              ) : null}
             </div>
             <div>
               <div className="tiny muted">ثبت</div>
@@ -127,6 +176,16 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
             </div>
             <div className="small strong">
               {order.user?.display_name} — {order.user?.mobile}
+              {order.user?.mobile ? (
+                <Link
+                  className="tiny"
+                  style={{ color: 'var(--brand-600)', marginInlineStart: 8 }}
+                  to={`/orders?search=${encodeURIComponent(order.user.mobile)}`}
+                  onClick={onClose}
+                >
+                  همه‌ی سفارش‌های این مشتری
+                </Link>
+              ) : null}
             </div>
             {order.shippingAddressSnapshot ? (
               <div className="small muted">
@@ -159,7 +218,7 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
               <tbody>
                 {(order.items ?? []).map((item) => (
                   <tr key={item.id}>
-                    <td className="small">{item.product?.title}</td>
+                    <td className="small">{item.product?.title ?? 'کالای حذف‌شده'}</td>
                     <td className="tiny muted">
                       {item.variant_title ?? '—'}
                       {item.variant_sku ? ` (${item.variant_sku})` : ''}
@@ -182,7 +241,12 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
             </div>
             {Number(order.discount_amount) > 0 ? (
               <div className="spread small" style={{ color: 'var(--success-600)' }}>
-                <span>تخفیف</span>
+                <span>
+                  تخفیف
+                  {order.discount?.code ? (
+                    <bdi className="tiny"> ({order.discount.code})</bdi>
+                  ) : null}
+                </span>
                 <span>−{formatToman(order.discount_amount)}</span>
               </div>
             ) : null}
@@ -227,30 +291,36 @@ export default function OrderDrawer({ orderId, onClose, onChanged }) {
                   <option value="">انتخاب کنید…</option>
                   {nextOptions.map((value) => (
                     <option key={value} value={value}>
-                      {ORDER_STATUS[value]?.label ?? value}
+                      {transitionLabel(order, value)}
                     </option>
                   ))}
                 </select>
               </Field>
 
-              {target === 'sent' ? (
+              {target === 'sent' || editingTracking ? (
                 <Field
                   label="کد رهگیری مرسوله"
-                  hint="همراه پیامک «ارسال شد» برای مشتری فرستاده می‌شود"
+                  hint={
+                    editingTracking
+                      ? 'برای اصلاح کد ثبت‌شده؛ وضعیت سفارش تغییر نمی‌کند'
+                      : 'همراه پیامک «ارسال شد» برای مشتری فرستاده می‌شود'
+                  }
                 >
                   <input
                     className="input"
                     value={tracking}
                     onChange={(event) => setTracking(event.target.value)}
-                    placeholder="مثلاً ۱۲۳۴۵۶۷۸۹"
+                    placeholder="مثلاً 123456789"
+                    dir="ltr"
                   />
                 </Field>
               ) : null}
 
               {target === 'cancelled' ? (
                 <p className="tiny" style={{ color: 'var(--warning-600)' }}>
-                  با لغو سفارش، موجودی کالاها برمی‌گردد و در صورت پرداخت، مبلغ به
-                  کیف پول مشتری بازگردانده می‌شود.
+                  {moneyIn
+                    ? 'با لغو سفارش، موجودی کالاها برمی‌گردد و مبلغ پرداختی به کیف پول مشتری بازگردانده می‌شود.'
+                    : 'با لغو سفارش، موجودی کالاها برمی‌گردد. وجهی دریافت نشده، پس مبلغی هم بازگردانده نمی‌شود.'}
                 </p>
               ) : null}
             </div>

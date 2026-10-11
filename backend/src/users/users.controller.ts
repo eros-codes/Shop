@@ -34,8 +34,14 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(userRoleEnum.AdminUser)
   @Post()
-  async create(@Body() createUserDto: CreateUserDto) {
-    const newUser = await this.usersService.create(createUserDto);
+  async create(
+    @Body() createUserDto: CreateUserDto,
+    @CurrentUser() currentUser: CurrentUserPayload,
+  ) {
+    const newUser = await this.usersService.create(createUserDto, {
+      userId: currentUser.userId,
+      label: currentUser.mobile ?? null,
+    });
     return { data: newUser, message: 'User created successfully' };
   }
 

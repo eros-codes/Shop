@@ -1,14 +1,16 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
 import { Button, Field } from '../components/ui/Primitives';
 import { useFieldErrors } from '../lib/useFieldErrors';
 import { RESEND_SECONDS, cooldownFrom, useCountdown } from '../lib/useCountdown';
+import { digitsOnly } from '../lib/format';
+import { usePageTitle } from '../lib/usePageTitle';
 
 export default function Register() {
-  const { register, verifyOtp } = useAuth();
+  const { register, verifyOtp, ready, isAuthenticated } = useAuth();
   const toast = useToast();
   const fieldErrors = useFieldErrors();
   const navigate = useNavigate();
@@ -19,6 +21,11 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [resendIn, setResendIn] = useCountdown();
+  usePageTitle('ساخت حساب کاربری');
+
+  if (ready && isAuthenticated && !loading) {
+    return <Navigate to="/account" replace />;
+  }
 
   const payload = () => ({
     display_name: form.display_name.trim(),
@@ -157,10 +164,11 @@ export default function Register() {
                 <input
                   className="input"
                   inputMode="numeric"
+                  autoComplete="one-time-code"
                   maxLength={6}
                   style={{ textAlign: 'center', fontSize: 22, letterSpacing: 8 }}
                   value={code}
-                  onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))}
+                  onChange={(event) => setCode(digitsOnly(event.target.value).slice(0, 6))}
                   required
                 />
               </Field>

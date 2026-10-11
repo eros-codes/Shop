@@ -45,6 +45,10 @@ test('a wallet: charged and withdrawn with a reason, asked first, and every move
   await amount.fill('۵۰۰۰۰');
   await note.fill('هدیه‌ی جشنواره');
   await modal.getByRole('button', { name: 'شارژ کیف پول' }).click();
+  // The panel clears the form once the server has answered. Waiting only
+  // for the server let the next amount be typed before that, and then
+  // wiped - on a slow machine the test raced its own page.
+  await expect(amount).toHaveValue('');
   await expect.poll(() => walletBalance(admin, customerId)).toBe(start + 50000);
 
   await modal.getByRole('button', { name: 'برداشت', exact: true }).click();
@@ -56,6 +60,8 @@ test('a wallet: charged and withdrawn with a reason, asked first, and every move
   // Nothing leaves before it is confirmed.
   expect(await walletBalance(admin, customerId)).toBe(start + 50000);
   await confirm.locator('.modal-foot').getByRole('button', { name: 'برداشت' }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(amount).toHaveValue('');
   await expect.poll(() => walletBalance(admin, customerId)).toBe(start + 30000);
 
   // More than there is: refused, in Persian.

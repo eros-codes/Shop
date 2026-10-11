@@ -18,6 +18,8 @@ export function useInView(ref, deps = []) {
     const observer = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting));
     observer.observe(element);
     return () => observer.disconnect();
+    // The caller says what re-renders the element; `ref` itself never changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   return inView;

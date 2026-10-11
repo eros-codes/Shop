@@ -3,7 +3,6 @@ import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import {
   BarChart3,
   Boxes,
-  ClipboardList,
   FolderTree,
   Headphones,
   LayoutDashboard,

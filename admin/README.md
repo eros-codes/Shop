@@ -6,6 +6,7 @@ shipping, discounts, users and the audit trail.
 ```bash
 npm install
 npm run dev      # http://localhost:5000
+npm run lint     # ESLint (CI runs it too)
 ```
 
 Runs on **5000** and talks to the API on **3000** through the same `/api`

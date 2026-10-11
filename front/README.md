@@ -6,6 +6,7 @@ shop for phones, laptops, tablets and gadgets.
 ```bash
 npm install
 npm run dev      # http://localhost:4000
+npm run lint     # ESLint (CI runs it too)
 ```
 
 The storefront runs on **4000** and talks to the API on **3000**. In

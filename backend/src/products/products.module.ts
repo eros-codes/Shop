@@ -10,6 +10,7 @@ import { ProductVariant } from './entities/product-variant.entity';
 import { AttributesModule } from '../attributes/attributes.module';
 import { UsersModule } from '../users/users.module';
 import { CategoriesModule } from '../categories/categories.module';
+import { ProductImageProcessor } from './images/product-image-processor';
 
 @Module({
   imports: [
@@ -25,7 +26,7 @@ import { CategoriesModule } from '../categories/categories.module';
     CategoriesModule,
   ],
   controllers: [ProductsController],
-  providers: [ProductsService],
+  providers: [ProductsService, ProductImageProcessor],
   exports: [ProductsService],
 })
 export class ProductsModule {}

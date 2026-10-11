@@ -22,7 +22,8 @@ import {
   discountPercent,
   effectivePrice,
   formatToman,
-  imageUrl,
+  imageAt,
+  imageSrcSet,
   returnWindowLabel,
   toPersianDigits,
 } from '../lib/format';
@@ -280,7 +281,10 @@ export default function ProductDetail() {
           <div className="gallery-main">
             {images[activeImage] ? (
               <img
-                src={imageUrl(images[activeImage].url ?? images[activeImage].path)}
+                src={imageAt(images[activeImage], 800)}
+                srcSet={imageSrcSet(images[activeImage])}
+                // Full width on a phone, about half the page on a wide screen.
+                sizes="(max-width: 900px) 100vw, 640px"
                 alt={product.title}
               />
             ) : (
@@ -307,7 +311,7 @@ export default function ProductDetail() {
                   data-active={index === activeImage}
                   onClick={() => setActiveImage(index)}
                 >
-                  <img src={imageUrl(image.url ?? image.path)} alt="" />
+                  <img src={imageAt(image, 200)} alt="" loading="lazy" />
                 </button>
               ))}
             </div>

@@ -387,12 +387,29 @@ development here - a column TypeORM could not map, a migration that only
 worked on an empty database, a query that compiled but named a column
 wrong - all surface in one of those steps rather than in production.
 
+## Product images
+
+Every uploaded photo is decoded once and stored at three widths - 400,
+800 and 1600 pixels on its longer side, as WebP - turned upright by its
+EXIF orientation, with its metadata (the GPS position a phone writes
+into every photo included) dropped. A small original is never enlarged;
+it just has fewer sizes. Each image's `sizes` lists them, and the
+storefront hands them to the browser as `srcset`, so a product card on
+a phone loads the 400 rather than a 4MB camera file. Anything over 50
+megapixels is refused before it is decoded.
+
+Images uploaded before this existed are converted with
+
+```bash
+npm run images:optimize                        # keeps the original files
+npm run images:optimize -- --delete-originals  # removes them afterwards
+```
+
+which only touches images that have no sizes yet, and leaves SVG
+drawings alone.
+
 ## Known gaps
 
-- Product images are stored and served as uploaded: no resizing, no
-  WebP. Worth adding (with `sharp`) once the storefront is serving real
-  photographs - a 4MB phone photo behind a 150px product card is the
-  single biggest page-weight problem a shop like this has.
 - Uploads live on the application's own disk. Moving them to object
   storage (S3, ArvanCloud) is an adapter behind the existing
   `LocalFileStorage` interface, not a rewrite - but it needs a real
@@ -401,17 +418,18 @@ wrong - all surface in one of those steps rather than in production.
   `ZarinpalService`, so a second provider is a sibling class plus a
   choice at checkout; until there is a second merchant account, code
   that can't be tested against the real thing is not readiness.
-- Database backups are deliberately not scripted here: how they are
-  taken depends on where this is deployed, and most managed MySQL
-  offerings do it for you. Whatever hosts it, make sure point-in-time
-  recovery is on before the first real order.
+- Backups are nightly (`deploy/scripts/backup.sh`: dump, restore test,
+  encrypted off-site copy - see `deploy/DEPLOY.md`), so the worst case
+  loses up to a day of orders. Point-in-time recovery (MySQL binary
+  logs shipped off the server, or a managed database that does it) would
+  close that gap once the shop is busy enough for a day to matter.
 - Admin-only routes are guarded by role, but there's no finer-grained
   permission system (e.g. per-admin scopes) - anyone with the `admin`
   role can do everything.
-- Order-history deletion policy is CASCADE-on-user-delete for
-  simplicity - some businesses prefer preserving order records (via a
-  nullable/SET NULL relation) for accounting reasons even after an
-  account is removed.
+- Deleting an account is a soft delete: the number is anonymised and
+  the row kept, so the customer's orders, payments and wallet history
+  stay on record for the accounts. (The schema's CASCADE from user to
+  orders would only matter for a hard delete, which nothing here does.)
 - Local disk is used for product image storage - fine for one
   instance, but move to S3 or similar object storage before running
   more than one server (disk isn't shared between instances).

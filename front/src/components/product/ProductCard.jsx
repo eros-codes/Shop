@@ -6,6 +6,8 @@ import { useWishlist } from '../../context/WishlistContext';
 import {
   basePrice,
   coverImage,
+  coverOf,
+  imageSrcSet,
   discountPercent,
   effectivePrice,
   formatToman,
@@ -32,7 +34,7 @@ export default function ProductCard({ product }) {
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const href = `/product/${product.slug ?? product.id}`;
-  const image = coverImage(product);
+  const image = coverImage(product, 400);
   const now = effectivePrice(product);
   const was = basePrice(product);
   const off = discountPercent(product);
@@ -84,7 +86,15 @@ export default function ProductCard({ product }) {
       <div className="product-top">
         <Link to={href} className="product-media" aria-label={product.title}>
           {image ? (
-            <img src={image} alt={product.title} loading="lazy" />
+            <img
+              src={image}
+              srcSet={imageSrcSet(coverOf(product))}
+              // Two to a row on a phone, ~300px wide on a wide screen.
+              sizes="(max-width: 640px) 50vw, 300px"
+              alt={product.title}
+              loading="lazy"
+              decoding="async"
+            />
           ) : (
             <span className="placeholder">
               <ImageOff size={34} />

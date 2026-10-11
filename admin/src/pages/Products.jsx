@@ -139,7 +139,7 @@ export default function Products() {
               </thead>
               <tbody>
                 {result.items.map((product) => {
-                  const image = coverImage(product);
+                  const image = coverImage(product, 100);
                   return (
                     <tr key={product.id}>
                       <td>

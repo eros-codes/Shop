@@ -79,3 +79,46 @@ test("a guest's basket shows today's price, not the price when it was added", as
     await patchVariant({ price: variant.price ?? null, sale_price: variant.sale_price ?? null });
   }
 });
+
+test('on a phone a product card loads a small copy of the photo, never the full one', async ({
+  page,
+  browser,
+}) => {
+  const { admin } = tokensFor();
+  const { product } = await sellableProduct();
+
+  // A camera-sized photo, drawn by the browser.
+  const maker = await browser.newPage();
+  const jpeg = await maker.evaluate(async () => {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 3000, height: 2000 });
+    const context = canvas.getContext('2d');
+    const gradient = context.createLinearGradient(0, 0, 3000, 2000);
+    gradient.addColorStop(0, '#e63946');
+    gradient.addColorStop(1, '#2a9d8f');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 3000, 2000);
+    const blob = await new Promise((done) => canvas.toBlob(done, 'image/jpeg', 0.92));
+    return Array.from(new Uint8Array(await blob.arrayBuffer()));
+  });
+  await maker.close();
+
+  const form = new FormData();
+  form.append('images', new Blob([Uint8Array.from(jpeg)], { type: 'image/jpeg' }), 'camera.jpg');
+  const uploaded = await api('POST', `/products/${product.id}/images`, { token: admin, form });
+  const image = uploaded.data.images.at(-1);
+  expect(image.sizes.map((size) => size.width)).toEqual([400, 800, 1600]);
+  await api('PATCH', `/products/${product.id}/images/${image.id}/cover`, { token: admin });
+
+  try {
+    await page.goto(`/products?search=${encodeURIComponent(product.title)}`);
+    const picture = page.locator('.product-card', { hasText: product.title }).first().locator('img');
+    await picture.scrollIntoViewIfNeeded();
+    // A card is half a phone screen wide: the 400 or (on a dense screen)
+    // the 800 - not the 1600, and not the original upload.
+    await expect
+      .poll(() => picture.evaluate((element) => element.currentSrc))
+      .toMatch(/-(400|800)\.webp$/);
+  } finally {
+    await api('DELETE', `/products/${product.id}/images/${image.id}`, { token: admin });
+  }
+});

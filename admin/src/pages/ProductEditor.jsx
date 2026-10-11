@@ -3,7 +3,7 @@ import { ImageOff, Plus, Trash2, Upload } from 'lucide-react';
 import { api, request } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { translateError } from '../lib/errorMessages';
-import { digitsOnly, imageUrl } from '../lib/format';
+import { digitsOnly, imageAt } from '../lib/format';
 import { Button, Confirm, Field, Modal } from '../components/Primitives';
 import { useFieldErrors } from '../lib/useFieldErrors';
 
@@ -864,7 +864,7 @@ export default function ProductEditor({ mode, productId, initialTab, onClose, on
                   {images.map((image, index) => (
                     <div className="card card-pad stack" key={image.id} style={{ gap: 8 }}>
                       <img
-                        src={imageUrl(image.url ?? image.path)}
+                        src={imageAt(image, 200)}
                         alt=""
                         style={{ height: 110, objectFit: 'contain' }}
                       />

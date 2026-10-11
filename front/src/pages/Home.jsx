@@ -161,7 +161,7 @@ export default function Home() {
   // falls back to a drawn shape when it does not - an empty catalogue
   // should still look deliberate.
   const heroImages = useMemo(
-    () => bestSellers.items.map(coverImage).filter(Boolean),
+    () => bestSellers.items.map((product) => coverImage(product, 800)).filter(Boolean),
     [bestSellers.items],
   );
 

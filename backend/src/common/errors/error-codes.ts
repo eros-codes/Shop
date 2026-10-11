@@ -30,6 +30,9 @@ export const ErrorCodes = {
   VARIANT_NOT_FOUND: 'VARIANT_NOT_FOUND',
   VARIANT_NOT_FOR_SALE: 'VARIANT_NOT_FOR_SALE',
   LAST_ACTIVE_VARIANT: 'LAST_ACTIVE_VARIANT',
+  // An upload that passed the type check but could not be decoded - a
+  // damaged file, or one with absurd dimensions.
+  IMAGE_UNREADABLE: 'IMAGE_UNREADABLE',
 
   // Catalogue upkeep in the panel. As bare 409s these all read "this
   // already exists" there, which was the wrong sentence for every one.

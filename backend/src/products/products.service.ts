@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { randomUUID } from 'crypto';
 import {
   Brackets,
   DataSource,
@@ -41,6 +40,12 @@ import { MergeBasketDto } from './dto/merge-basket.dto';
 import { FilterProductDto } from './dto/filter-product.dto';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
+import { ProductImageProcessor } from './images/product-image-processor';
+import {
+  StoredImage,
+  storedKeysOf,
+  storeRenditions,
+} from './images/image-files';
 import { BookmarkProduct } from './entities/product-bookmark.entity';
 import { Category } from '../categories/entities/category.entity';
 import { Brand } from '../brands/entities/brand.entity';
@@ -62,8 +67,6 @@ import { lockUserRow } from '../users/utils/lock-user-row';
 import { ValidatedImage } from './pipes/product-images.pipe';
 import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
-
-export const PRODUCT_IMAGES_FOLDER = 'products';
 
 const DEFAULT_VARIANT_TITLE = 'Default';
 
@@ -112,6 +115,7 @@ export class ProductsService {
     private readonly categoriesService: CategoriesService,
     private readonly auditService: AuditService,
     private readonly attributesService: AttributesService,
+    private readonly imageProcessor: ProductImageProcessor,
   ) {}
 
   private static readonly EFFECTIVE_PRICE_SQL = `IF(
@@ -314,7 +318,7 @@ export class ProductsService {
         'cover',
         'cover.order = 0',
       )
-      .addSelect(['cover.id', 'cover.url', 'cover.order']);
+      .addSelect(['cover.id', 'cover.url', 'cover.order', 'cover.sizes']);
 
     if (
       !(await this.applyFilters(qb, query, {
@@ -639,13 +643,20 @@ export class ProductsService {
 
     const storedKeys: string[] = [];
     try {
-      const filenames: string[] = [];
-      for (const image of images) {
-        const filename = `${randomUUID()}.${image.extension}`;
-        const key = `${PRODUCT_IMAGES_FOLDER}/${filename}`;
-        await this.fileStorage.save(key, image.buffer);
-        storedKeys.push(key);
-        filenames.push(filename);
+      // Each photo is stored at every width in IMAGE_WIDTHS, as WebP. One
+      // unreadable file fails the whole upload, and whatever was already
+      // written is removed below.
+      const prepared: StoredImage[] = [];
+      for (const [index, image] of images.entries()) {
+        const renditions = await this.imageProcessor.renditions(
+          image.buffer,
+          index,
+        );
+        prepared.push(
+          await storeRenditions(this.fileStorage, renditions, (key) =>
+            storedKeys.push(key),
+          ),
+        );
       }
 
       await this.dataSource.transaction(async (manager) => {
@@ -657,11 +668,8 @@ export class ProductsService {
 
         await manager.insert(
           ProductImage,
-          filenames.map((filename, index) => ({
-            filename,
-            url: this.fileStorage.getPublicUrl(
-              `${PRODUCT_IMAGES_FOLDER}/${filename}`,
-            ),
+          prepared.map((image, index) => ({
+            ...image,
             order: firstOrder + index,
             product: { id: productId },
           })),
@@ -677,11 +685,11 @@ export class ProductsService {
   }
 
   async removeImage(productId: number, imageId: number): Promise<Product> {
-    const filename = await this.dataSource.transaction(async (manager) => {
+    const removed = await this.dataSource.transaction(async (manager) => {
       await lockActiveProduct(manager, productId, 'pessimistic_write');
 
       const image = await manager.findOne(ProductImage, {
-        select: { id: true, filename: true, order: true },
+        select: { id: true, filename: true, order: true, sizes: true },
         where: { id: imageId, product: { id: productId } },
       });
       if (!image) {
@@ -702,10 +710,12 @@ export class ProductsService {
         .orderBy('`order`', 'ASC')
         .execute();
 
-      return image.filename;
+      return image;
     });
 
-    await this.fileStorage.delete(`${PRODUCT_IMAGES_FOLDER}/${filename}`);
+    for (const key of storedKeysOf(removed)) {
+      await this.fileStorage.delete(key);
+    }
     await this.catalogCache.invalidate(CatalogCacheScope.Products);
     return this.findOne(productId, { includeDrafts: true });
   }

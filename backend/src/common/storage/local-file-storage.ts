@@ -2,12 +2,16 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { mkdir, rename, unlink, writeFile } from 'fs/promises';
-import { dirname, isAbsolute, resolve, sep } from 'path';
+import { dirname, resolve, sep } from 'path';
 import { FileStorage } from './file-storage';
 
+// Always normalised: an absolute path given with forward slashes on
+// Windows ("C:/data/uploads") used to be kept as typed, and the
+// outside-the-root check below - comparing it with resolve()'s
+// backslashes - then refused every file.
 export function resolveUploadRoot(uploadDir?: string): string {
   const dir = uploadDir?.trim() || 'uploads';
-  return isAbsolute(dir) ? dir : resolve(process.cwd(), dir);
+  return resolve(process.cwd(), dir);
 }
 
 @Injectable()

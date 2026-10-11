@@ -121,16 +121,38 @@ export function imageUrl(path) {
   return path.startsWith('/') ? path : `/${path}`;
 }
 
+// Uploaded photos are stored at several widths (`sizes`: [{ width, url }],
+// smallest first). Older uploads and the demo's drawings have only `url`.
+const sizesOf = (image) =>
+  Array.isArray(image?.sizes) && image.sizes.length ? image.sizes : null;
+
+// The smallest stored width that is at least `minWidth` pixels wide (or
+// the largest there is). Without `minWidth`: the full image.
+export function imageAt(image, minWidth) {
+  const sizes = sizesOf(image);
+  if (!sizes || !minWidth) return imageUrl(image?.url ?? image?.path ?? null);
+  const fit = sizes.find((size) => size.width >= minWidth) ?? sizes[sizes.length - 1];
+  return imageUrl(fit.url);
+}
+
+// For <img srcSet>: the browser picks the smallest file that is still
+// sharp at the size it draws - a phone loads the 400, not the 1600.
+export function imageSrcSet(image) {
+  const sizes = sizesOf(image);
+  return sizes ? sizes.map((size) => `${imageUrl(size.url)} ${size.width}w`).join(', ') : undefined;
+}
+
 // The listing and the product page answer differently: a list item
 // carries a single `coverImage`, a full product carries its `images`.
 // Reading only one of them is why product cards came back blank.
-export function coverImage(product) {
+export function coverOf(product) {
   const cover = product?.coverImage;
-  if (cover) {
-    return imageUrl(typeof cover === 'string' ? cover : (cover.url ?? cover.path));
-  }
-
+  if (cover) return typeof cover === 'string' ? { url: cover } : cover;
   const images = product?.images ?? [];
-  const first = images.find((image) => image.is_cover) ?? images[0];
-  return imageUrl(first?.url ?? first?.path ?? null);
+  return images.find((image) => image.is_cover) ?? images[0] ?? null;
+}
+
+export function coverImage(product, minWidth) {
+  const cover = coverOf(product);
+  return cover ? imageAt(cover, minWidth) : null;
 }

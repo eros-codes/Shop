@@ -38,7 +38,14 @@ test('any picture can be made the cover; the rest keep their order', async ({ pa
     form.append('images', new Blob([await pngOf(browser, colour)], { type: 'image/png' }), `e2e-${i}.png`);
   }
   expect((await api('POST', `/products/${product.id}/images`, { token: admin, form })).status).toBe(201);
-  const before = (await api('GET', `/products/${product.id}`, { token: admin })).data.images.map((i) => i.id);
+  const uploaded = (await api('GET', `/products/${product.id}`, { token: admin })).data.images;
+  const before = uploaded.map((i) => i.id);
+
+  // Stored as WebP, at the widths it has (a 120px picture is never enlarged).
+  for (const image of uploaded.slice(-2)) {
+    expect(image.url).toMatch(/\.webp$/);
+    expect(image.sizes).toEqual([{ width: 120, url: image.url }]);
+  }
 
   await page.goto(`/products?edit=${product.id}`);
   await page.locator('.modal').getByRole('button', { name: 'تصاویر' }).click();

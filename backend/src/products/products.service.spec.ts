@@ -21,6 +21,7 @@ import { CategoriesService } from '../categories/categories.service';
 import { AuditService } from '../audit/audit.service';
 import { AttributesService } from '../attributes/attributes.service';
 import { ErrorCodes } from '../common/errors/error-codes';
+import { ProductImageProcessor } from './images/product-image-processor';
 
 function makeQueryBuilder() {
   const qb: Record<string, jest.Mock> = {};
@@ -62,6 +63,7 @@ describe('ProductsService', () => {
   let variantRepo: Record<string, jest.Mock>;
   let qb: Record<string, jest.Mock>;
   let fileStorage: Record<string, jest.Mock>;
+  let imageProcessor: { renditions: jest.Mock };
   let catalogCache: { invalidate: jest.Mock };
   let attributesService: Record<string, jest.Mock>;
   let dataSource: Record<string, jest.Mock>;
@@ -121,6 +123,16 @@ describe('ProductsService', () => {
       ),
     };
     catalogCache = { invalidate: jest.fn().mockResolvedValue(undefined) };
+    // Three widths per photo, as a large camera photo gives.
+    imageProcessor = {
+      renditions: jest.fn().mockResolvedValue(
+        [400, 800, 1600].map((width) => ({
+          width,
+          height: width,
+          buffer: Buffer.from(`w${width}`),
+        })),
+      ),
+    };
     dataSource = {
       transaction: jest.fn((cb: any) => cb(manager)),
       getRepository: jest.fn(() => ({ find: jest.fn().mockResolvedValue([]) })),
@@ -145,6 +157,7 @@ describe('ProductsService', () => {
         { provide: UsersService, useValue: {} },
         { provide: DataSource, useValue: dataSource },
         { provide: FileStorage, useValue: fileStorage },
+        { provide: ProductImageProcessor, useValue: imageProcessor },
         { provide: CatalogCacheService, useValue: catalogCache },
         {
           provide: CategoriesService,
@@ -362,9 +375,56 @@ describe('ProductsService', () => {
       const [entity, rows] = manager.insert.mock.calls[0];
       expect(entity).toBe(ProductImage);
       expect(rows.map((row: any) => row.order)).toEqual([3, 4]);
-      expect(rows[0].filename).toMatch(/\.png$/);
-      expect(rows[1].filename).toMatch(/\.jpg$/);
-      expect(fileStorage.save).toHaveBeenCalledTimes(2);
+      expect(fileStorage.save).toHaveBeenCalledTimes(6);
+    });
+
+    it('stores every width as WebP; the largest is the image itself', async () => {
+      manager.findOne.mockResolvedValue({ id: 1 });
+      manager.maximum.mockResolvedValue(null);
+
+      await service.addImages(1, [jpg]);
+
+      const [row] = manager.insert.mock.calls[0][1];
+      const id = row.filename.replace(/\.webp$/, '');
+      expect(row.filename).toMatch(/^[0-9a-f-]{36}\.webp$/);
+      expect(fileStorage.save.mock.calls.map((call) => call[0])).toEqual([
+        `products/${id}-400.webp`,
+        `products/${id}-800.webp`,
+        `products/${id}.webp`,
+      ]);
+      expect(row.sizes).toEqual([
+        {
+          width: 400,
+          url: `http://localhost:3000/uploads/products/${id}-400.webp`,
+        },
+        {
+          width: 800,
+          url: `http://localhost:3000/uploads/products/${id}-800.webp`,
+        },
+        {
+          width: 1600,
+          url: `http://localhost:3000/uploads/products/${id}.webp`,
+        },
+      ]);
+      expect(row.url).toBe(row.sizes[2].url);
+    });
+
+    it('removes what it wrote when a later photo cannot be read', async () => {
+      manager.findOne.mockResolvedValue({ id: 1 });
+      imageProcessor.renditions
+        .mockResolvedValueOnce([
+          { width: 400, height: 400, buffer: Buffer.from('a') },
+        ])
+        .mockRejectedValueOnce(new Error('unreadable'));
+
+      await expect(service.addImages(1, [png, jpg])).rejects.toThrow(
+        'unreadable',
+      );
+
+      expect(fileStorage.delete.mock.calls.map((call) => call[0])).toEqual(
+        fileStorage.save.mock.calls.map((call) => call[0]),
+      );
+      expect(manager.insert).not.toHaveBeenCalled();
     });
 
     it('starts at position 0 for a product without images', async () => {
@@ -401,6 +461,25 @@ describe('ProductsService', () => {
   });
 
   describe('removeImage', () => {
+    it('deletes every stored width of the image', async () => {
+      manager.findOne.mockResolvedValueOnce({ id: 1 }).mockResolvedValueOnce({
+        id: 9,
+        filename: 'abc.webp',
+        order: 0,
+        sizes: [
+          { width: 400, url: 'http://x/uploads/products/abc-400.webp' },
+          { width: 1600, url: 'http://x/uploads/products/abc.webp' },
+        ],
+      });
+
+      await service.removeImage(1, 9);
+
+      expect(fileStorage.delete.mock.calls.map((call) => call[0])).toEqual([
+        'products/abc.webp',
+        'products/abc-400.webp',
+      ]);
+    });
+
     it('deletes the row, closes the gap, and only then deletes the file', async () => {
       manager.findOne
         .mockResolvedValueOnce({ id: 1 })
